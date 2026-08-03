@@ -1,0 +1,12 @@
+# Harden the uploads directory.
+# - Never execute scripts here (defense in depth; filenames are also forced
+#   to image extensions by the upload handler).
+# - Disable directory listing.
+# - Discourage MIME sniffing.
+<FilesMatch "\.(php|phtml|phar|phps|cgi|pl|py|sh)$">
+    Require all denied
+</FilesMatch>
+Options -Indexes
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>

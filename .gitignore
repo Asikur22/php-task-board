@@ -1,0 +1,16 @@
+# Secrets & local overrides
+.env
+.env.local
+.env.*.local
+
+# Zip files
+*.zip
+
+# SQLite runtime files
+database/data.db
+database/data.db-shm
+database/data.db-wal
+
+# Uploaded images (optional — keep if you don't want binaries in git)
+uploads/*
+!uploads/.htaccess
