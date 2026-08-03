@@ -2265,10 +2265,6 @@ async function init() {
   let me;
   try {
     me = await getJSON(`${API}?op=me`);
-    if (me && me.version) {
-      const verEl = document.getElementById('app-version');
-      if (verEl) verEl.textContent = 'v' + me.version;
-    }
     applyRegistrationUi(!!me.registration_open);
     applyNotificationPollConfig(me.notification_poll_seconds);
   } catch (err) {

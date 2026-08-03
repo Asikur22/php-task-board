@@ -21,9 +21,6 @@ require __DIR__ . '/inc/db.php';
 require __DIR__ . '/inc/auth.php';
 require_once __DIR__ . '/inc/sanitize.php';
 
-/** App semver — bump patch on each code change. */
-const APP_VERSION = '1.10.12';
-
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 auth_start_session();
@@ -166,7 +163,7 @@ try {
         // Public auth ops (no login required)
         // ===================================================================
 
-        case 'me': // who am I? { user:null, version:'1.3.3' } when logged out
+        case 'me': // who am I? { user: null } when logged out
             $me = current_user();
             $pollCfg = [
                 'notification_poll_seconds' => NOTIFICATION_POLL_SECONDS,
@@ -175,7 +172,6 @@ try {
                 echo json_encode([
                     'ok' => true,
                     'user' => null,
-                    'version' => APP_VERSION,
                     'registration_open' => registration_is_open($pdo),
                 ] + $pollCfg);
             } else {
@@ -183,7 +179,6 @@ try {
                     'ok' => true,
                     'user' => $me,
                     'csrf' => csrf_token(),
-                    'version' => APP_VERSION,
                     'registration_open' => registration_is_open($pdo),
                 ] + $pollCfg);
             }

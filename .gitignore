@@ -6,6 +6,9 @@
 # Zip files
 *.zip
 
+# migrations files
+migrations/*
+
 # SQLite runtime files
 database/data.db
 database/data.db-shm
