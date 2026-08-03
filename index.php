@@ -40,9 +40,9 @@
           <div class="password-field">
             <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required>
             <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
-              <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5c-5.5 0-9.5 4.5-10.7 7 1.2 2.5 5.2 7 10.7 7s9.5-4.5 10.7-7C21.5 9.5 17.5 5 12 5zm0 11.5A4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 0 1 0 9zm0-2.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
-              <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden><path fill="currentColor" d="M3.4 2 2 3.4l3.2 3.2C3.4 8.2 1.9 10.3 1.3 12c1.2 2.5 5.2 7 10.7 7 1.9 0 3.6-.4 5.1-1.1L20.6 22 22 20.6 3.4 2zM12 17c-4.3 0-7.5-3.3-8.7-5 .5-1 1.7-2.7 3.5-4l2 2A4.5 4.5 0 0 0 12 16.5V17zm9.4-5c-.4.8-1.2 2-2.4 3.2l-1.5-1.5c.8-.8 1.4-1.7 1.8-2.2C18.1 9.8 15.4 7 12 7c-.5 0-1 .1-1.5.2L8.8 5.5C9.8 5.2 10.9 5 12 5c5.5 0 9.5 4.5 10.7 7-.3.6-.7 1.3-1.3 2z"/></svg>
-            </button>
+                <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
           </div>
           <button type="submit" class="btn btn-primary auth-submit">Log in</button>
           <button type="button" id="go-forgot" class="auth-link">Forgot password?</button>
@@ -54,9 +54,9 @@
           <div class="password-field">
             <input type="password" id="reg-password" placeholder="Password (min 8 characters)" autocomplete="new-password" minlength="8" required>
             <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
-              <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5c-5.5 0-9.5 4.5-10.7 7 1.2 2.5 5.2 7 10.7 7s9.5-4.5 10.7-7C21.5 9.5 17.5 5 12 5zm0 11.5A4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 0 1 0 9zm0-2.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
-              <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden><path fill="currentColor" d="M3.4 2 2 3.4l3.2 3.2C3.4 8.2 1.9 10.3 1.3 12c1.2 2.5 5.2 7 10.7 7 1.9 0 3.6-.4 5.1-1.1L20.6 22 22 20.6 3.4 2zM12 17c-4.3 0-7.5-3.3-8.7-5 .5-1 1.7-2.7 3.5-4l2 2A4.5 4.5 0 0 0 12 16.5V17zm9.4-5c-.4.8-1.2 2-2.4 3.2l-1.5-1.5c.8-.8 1.4-1.7 1.8-2.2C18.1 9.8 15.4 7 12 7c-.5 0-1 .1-1.5.2L8.8 5.5C9.8 5.2 10.9 5 12 5c5.5 0 9.5 4.5 10.7 7-.3.6-.7 1.3-1.3 2z"/></svg>
-            </button>
+                <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
           </div>
           <button type="submit" class="btn btn-primary auth-submit">Create account</button>
           <p class="modal-hint">We’ll email you a verification link to activate your account.</p>
@@ -88,9 +88,9 @@
         <div class="password-field">
           <input type="password" id="reset-password" placeholder="New password (min 8 characters)" autocomplete="new-password" minlength="8" required>
           <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
-              <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5c-5.5 0-9.5 4.5-10.7 7 1.2 2.5 5.2 7 10.7 7s9.5-4.5 10.7-7C21.5 9.5 17.5 5 12 5zm0 11.5A4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 0 1 0 9zm0-2.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
-              <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden><path fill="currentColor" d="M3.4 2 2 3.4l3.2 3.2C3.4 8.2 1.9 10.3 1.3 12c1.2 2.5 5.2 7 10.7 7 1.9 0 3.6-.4 5.1-1.1L20.6 22 22 20.6 3.4 2zM12 17c-4.3 0-7.5-3.3-8.7-5 .5-1 1.7-2.7 3.5-4l2 2A4.5 4.5 0 0 0 12 16.5V17zm9.4-5c-.4.8-1.2 2-2.4 3.2l-1.5-1.5c.8-.8 1.4-1.7 1.8-2.2C18.1 9.8 15.4 7 12 7c-.5 0-1 .1-1.5.2L8.8 5.5C9.8 5.2 10.9 5 12 5c5.5 0 9.5 4.5 10.7 7-.3.6-.7 1.3-1.3 2z"/></svg>
-            </button>
+                <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
         </div>
         <button type="button" id="reset-submit" class="btn btn-primary auth-submit">Update password</button>
         <button type="button" class="auth-link" data-back="main">← Back to log in</button>
@@ -369,16 +369,16 @@
             <div class="password-field margin-v">
               <input id="profile-cur-pass" class="member-input" type="password" placeholder="Current password" autocomplete="current-password">
               <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
-              <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5c-5.5 0-9.5 4.5-10.7 7 1.2 2.5 5.2 7 10.7 7s9.5-4.5 10.7-7C21.5 9.5 17.5 5 12 5zm0 11.5A4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 0 1 0 9zm0-2.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
-              <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden><path fill="currentColor" d="M3.4 2 2 3.4l3.2 3.2C3.4 8.2 1.9 10.3 1.3 12c1.2 2.5 5.2 7 10.7 7 1.9 0 3.6-.4 5.1-1.1L20.6 22 22 20.6 3.4 2zM12 17c-4.3 0-7.5-3.3-8.7-5 .5-1 1.7-2.7 3.5-4l2 2A4.5 4.5 0 0 0 12 16.5V17zm9.4-5c-.4.8-1.2 2-2.4 3.2l-1.5-1.5c.8-.8 1.4-1.7 1.8-2.2C18.1 9.8 15.4 7 12 7c-.5 0-1 .1-1.5.2L8.8 5.5C9.8 5.2 10.9 5 12 5c5.5 0 9.5 4.5 10.7 7-.3.6-.7 1.3-1.3 2z"/></svg>
-            </button>
+                <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
             </div>
             <div class="password-field margin-v">
               <input id="profile-new-pass" class="member-input" type="password" placeholder="New password (min 8 chars)" autocomplete="new-password" minlength="8">
               <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
-              <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5c-5.5 0-9.5 4.5-10.7 7 1.2 2.5 5.2 7 10.7 7s9.5-4.5 10.7-7C21.5 9.5 17.5 5 12 5zm0 11.5A4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 0 1 0 9zm0-2.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
-              <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden><path fill="currentColor" d="M3.4 2 2 3.4l3.2 3.2C3.4 8.2 1.9 10.3 1.3 12c1.2 2.5 5.2 7 10.7 7 1.9 0 3.6-.4 5.1-1.1L20.6 22 22 20.6 3.4 2zM12 17c-4.3 0-7.5-3.3-8.7-5 .5-1 1.7-2.7 3.5-4l2 2A4.5 4.5 0 0 0 12 16.5V17zm9.4-5c-.4.8-1.2 2-2.4 3.2l-1.5-1.5c.8-.8 1.4-1.7 1.8-2.2C18.1 9.8 15.4 7 12 7c-.5 0-1 .1-1.5.2L8.8 5.5C9.8 5.2 10.9 5 12 5c5.5 0 9.5 4.5 10.7 7-.3.6-.7 1.3-1.3 2z"/></svg>
-            </button>
+                <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
             </div>
           </div>
           <div class="modal-section">
@@ -433,7 +433,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <div id="app-version" class="app-version" title="Task Board Version">v1.10.9</div>
+  <div id="app-version" class="app-version" title="Task Board Version">v1.10.10</div>
 
   <script src="assets/app.js"></script>
 </body>

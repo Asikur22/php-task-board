@@ -79,7 +79,7 @@ function auth_start_session(): void
         $https = true;
     }
     session_set_cookie_params([
-        'lifetime' => 0,                 // session cookie — cleared when browser closes
+        'lifetime' => tb_env_int('SESSION_LIFETIME', 15552000),                 // session cookie — 6 months
         'path'     => '/',
         'httponly' => true,              // not readable from JS
         'samesite' => 'Lax',             // mitigates CSRF on top-level navigations
