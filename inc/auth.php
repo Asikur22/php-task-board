@@ -68,6 +68,15 @@ define('SMTP_FROM_NAME', tb_env('MAIL_FROM_NAME', tb_env('SMTP_FROM_NAME', 'Task
  */
 define('APP_BASE_URL', rtrim(tb_env('APP_BASE_URL', '') ?? '', '/'));
 
+/**
+ * How often the browser polls for new notifications (seconds).
+ * Clamped to 1–300. Change via NOTIFICATION_POLL_SECONDS in .env.
+ */
+define(
+    'NOTIFICATION_POLL_SECONDS',
+    max(1, min(300, tb_env_int('NOTIFICATION_POLL_SECONDS', 2)))
+);
+
 require_once __DIR__ . '/mail.php';
 // ---- Session + CSRF --------------------------------------------------------
 

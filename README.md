@@ -21,6 +21,7 @@ Copy `.env.example` to `.env` and set:
 |---|---|
 | `APP_BASE_URL` | Public HTTPS URL of the app (required for email links) |
 | `ALLOW_OPEN_REGISTRATION` | `true` = open signup; `false` = first user only, then invite-only |
+| `NOTIFICATION_POLL_SECONDS` | Browser poll interval for new notifications (default `2`, range 1–300) |
 | `TRUST_PROXY` | `true` only behind a trusted reverse proxy |
 | `MAIL_*` | SMTP host, port, credentials, from address |
 

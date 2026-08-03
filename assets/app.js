@@ -515,6 +515,10 @@ async function afterAuth(json) {
     history.replaceState(null, '', location.pathname);
   }
   showApp();
+  try {
+    const cfg = await getJSON(`${API}?op=me`);
+    if (cfg && cfg.ok) applyNotificationPollConfig(cfg.notification_poll_seconds);
+  } catch (err) { /* keep default */ }
   startNotificationPolling();
   await loadProjects();
   const saved = localStorage.getItem('tb_project');
@@ -2039,6 +2043,9 @@ function initPasswordToggles() {
 let notificationsCache = [];
 let notifPollTimer = null;
 let notifUnread = 0;
+/** Poll interval from server (.env NOTIFICATION_POLL_SECONDS), default 2s. */
+let notifPollMs = 2000;
+let notifFetchInFlight = false;
 
 function actorAvatarColor(name) {
   const colors = MEMBER_COLORS;
@@ -2130,6 +2137,8 @@ function renderNotificationsList() {
 
 async function loadNotifications({ silent } = {}) {
   if (!currentUser) return;
+  if (notifFetchInFlight) return;
+  notifFetchInFlight = true;
   try {
     const json = await getJSON(`${API}?op=notifications&limit=50`);
     if (!json.ok) {
@@ -2142,6 +2151,8 @@ async function loadNotifications({ silent } = {}) {
     if (overlay && !overlay.hidden) renderNotificationsList();
   } catch (err) {
     if (!silent) toast('Could not load notifications.');
+  } finally {
+    notifFetchInFlight = false;
   }
 }
 
@@ -2196,10 +2207,19 @@ async function onNotificationClick(n) {
   }
 }
 
+function applyNotificationPollConfig(seconds) {
+  const sec = Math.max(1, Math.min(300, Number(seconds) || 2));
+  notifPollMs = sec * 1000;
+}
+
 function startNotificationPolling() {
   stopNotificationPolling();
   loadNotifications({ silent: true });
-  notifPollTimer = setInterval(() => loadNotifications({ silent: true }), 30000);
+  notifPollTimer = setInterval(() => {
+    // Skip while the tab is hidden to avoid useless load.
+    if (document.hidden) return;
+    loadNotifications({ silent: true });
+  }, notifPollMs);
 }
 
 function stopNotificationPolling() {
@@ -2250,6 +2270,7 @@ async function init() {
       if (verEl) verEl.textContent = 'v' + me.version;
     }
     applyRegistrationUi(!!me.registration_open);
+    applyNotificationPollConfig(me.notification_poll_seconds);
   } catch (err) {
     toast('Could not reach api.php — serve via PHP (php -S localhost:8000).');
     showAuthPane('auth-main');

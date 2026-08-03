@@ -440,7 +440,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <div id="app-version" class="app-version" title="Task Board Version">v1.10.11</div>
+  <div id="app-version" class="app-version" title="Task Board Version">v1.10.12</div>
 
   <!-- Notifications drawer (slides in from the right) -->
   <div id="notif-drawer-overlay" class="notif-drawer-overlay" hidden>

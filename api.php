@@ -22,7 +22,7 @@ require __DIR__ . '/inc/auth.php';
 require_once __DIR__ . '/inc/sanitize.php';
 
 /** App semver — bump patch on each code change. */
-const APP_VERSION = '1.10.11';
+const APP_VERSION = '1.10.12';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -168,13 +168,16 @@ try {
 
         case 'me': // who am I? { user:null, version:'1.3.3' } when logged out
             $me = current_user();
+            $pollCfg = [
+                'notification_poll_seconds' => NOTIFICATION_POLL_SECONDS,
+            ];
             if ($me === null) {
                 echo json_encode([
                     'ok' => true,
                     'user' => null,
                     'version' => APP_VERSION,
                     'registration_open' => registration_is_open($pdo),
-                ]);
+                ] + $pollCfg);
             } else {
                 echo json_encode([
                     'ok' => true,
@@ -182,7 +185,7 @@ try {
                     'csrf' => csrf_token(),
                     'version' => APP_VERSION,
                     'registration_open' => registration_is_open($pdo),
-                ]);
+                ] + $pollCfg);
             }
             break;
 
