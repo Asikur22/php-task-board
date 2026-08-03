@@ -134,6 +134,22 @@ function db_init(PDO $pdo): void
             FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS notifications (
+            id          TEXT PRIMARY KEY,
+            user_id     TEXT NOT NULL,
+            actor_id    TEXT NOT NULL,
+            actor_name  TEXT NOT NULL,
+            project_id  TEXT NOT NULL,
+            card_id     TEXT,
+            type        TEXT NOT NULL,
+            message     TEXT NOT NULL,
+            meta_json   TEXT,
+            is_read     INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user
+            ON notifications (user_id, is_read, created_at DESC);
 
         -- Accounts + auth. Added when the app gained a login system; the
         -- tables are created idempotently so existing data.db files upgrade

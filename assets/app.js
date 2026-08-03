@@ -365,12 +365,14 @@ function showApp() {
 /** Header avatar + name for the signed-in user. */
 function renderUserChip() {
   const chip = document.getElementById('user-chip');
+  const bell = document.getElementById('btn-notifications');
   const name = document.getElementById('user-chip-name');
   const av = document.getElementById('user-chip-avatar');
   const initialsEl = document.getElementById('user-chip-initials');
   const img = document.getElementById('user-chip-img');
   if (!currentUser) {
     chip.hidden = true;
+    if (bell) bell.hidden = true;
     return;
   }
   name.textContent = currentUser.name;
@@ -387,6 +389,7 @@ function renderUserChip() {
     av.style.background = '#2563eb';
   }
   chip.hidden = false;
+  if (bell) bell.hidden = false;
 }
 
 /** Show/hide the Sign up tab based on server registration policy. */
@@ -491,9 +494,15 @@ function wireAuth() {
 
   document.getElementById('btn-logout').addEventListener('click', async () => {
     closeProfileModal();
+    closeNotifDrawer();
+    stopNotificationPolling();
     await postJSON(`${API}?op=logout`, {});
     currentUser = null;
     csrfToken = '';
+    notificationsCache = [];
+    updateNotifBadge(0);
+    const bell = document.getElementById('btn-notifications');
+    if (bell) bell.hidden = true;
     showAuthPane('auth-main');
   });
 }
@@ -506,6 +515,7 @@ async function afterAuth(json) {
     history.replaceState(null, '', location.pathname);
   }
   showApp();
+  startNotificationPolling();
   await loadProjects();
   const saved = localStorage.getItem('tb_project');
   currentProjectId = (saved && projects.some((p) => p.id === saved)) ? saved : (projects[0]?.id || null);
@@ -657,6 +667,7 @@ async function switchProject(id) {
   if (!membersModal.hidden) closeMembers();
   currentProjectId = id;
   localStorage.setItem('tb_project', id);
+  if (projectSelect && projectSelect.value !== id) projectSelect.value = id;
   await loadBoard();
 }
 
@@ -1213,6 +1224,10 @@ function renderModalChecklist() {
         onchange: (e) => {
           item.checked = e.target.checked;
           renderModalChecklist();
+          // Persist promptly so checklist completions create notifications.
+          const card = findCardAnywhere(editing.cardId);
+          if (card) card.checklist = editing.checklist;
+          save();
         },
       }),
       el('span', {
@@ -2018,8 +2033,210 @@ function initPasswordToggles() {
 // ---------------------------------------------------------------------------
 // Boot: show the auth view or the board depending on session state.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Notifications (bell + right drawer)
+// ---------------------------------------------------------------------------
+let notificationsCache = [];
+let notifPollTimer = null;
+let notifUnread = 0;
+
+function actorAvatarColor(name) {
+  const colors = MEMBER_COLORS;
+  let h = 0;
+  const s = String(name || '');
+  for (let i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) >>> 0;
+  return colors[h % colors.length];
+}
+
+function formatNotifTime(iso) {
+  if (!iso) return '';
+  // Server stores UTC as "YYYY-MM-DD HH:MM:SS"
+  const d = new Date(String(iso).includes('T') ? iso : (iso.replace(' ', 'T') + 'Z'));
+  if (Number.isNaN(d.getTime())) return '';
+  const diff = Date.now() - d.getTime();
+  const sec = Math.round(diff / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return min + 'm ago';
+  const hr = Math.round(min / 60);
+  if (hr < 24) return hr + 'h ago';
+  const day = Math.round(hr / 24);
+  if (day < 7) return day + 'd ago';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function updateNotifBadge(count) {
+  notifUnread = Math.max(0, Number(count) || 0);
+  const badge = document.getElementById('notif-badge');
+  const bell = document.getElementById('btn-notifications');
+  if (!badge || !bell) return;
+  if (notifUnread > 0) {
+    badge.hidden = false;
+    badge.textContent = notifUnread > 99 ? '99+' : String(notifUnread);
+    bell.classList.add('has-unread');
+  } else {
+    badge.hidden = true;
+    badge.textContent = '0';
+    bell.classList.remove('has-unread');
+  }
+}
+
+function renderNotificationsList() {
+  const list = document.getElementById('notif-drawer-list');
+  const empty = document.getElementById('notif-drawer-empty');
+  if (!list || !empty) return;
+  list.replaceChildren();
+
+  if (!notificationsCache.length) {
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+
+  notificationsCache.forEach((n) => {
+    const typeClass = n.type === 'checklist' ? 'is-checklist' : '';
+    const typeLabel = n.type === 'checklist' ? 'Checklist' : 'Comment';
+    const metaText = n.type === 'checklist'
+      ? (n.meta?.item_text || '')
+      : (n.meta?.excerpt || '');
+
+    const avInner = n.actor_photo
+      ? el('img', { src: n.actor_photo, alt: '' })
+      : initials(n.actor_name || '?');
+
+    const avatar = el('div', {
+      class: 'notif-item-avatar',
+      style: n.actor_photo ? '' : `background:${actorAvatarColor(n.actor_name)}`,
+    }, avInner);
+
+    list.appendChild(el('button', {
+      type: 'button',
+      class: 'notif-item' + (n.is_read ? '' : ' is-unread'),
+      onclick: () => onNotificationClick(n),
+    },
+      avatar,
+      el('div', { class: 'notif-item-body' },
+        el('div', { class: 'notif-item-top' },
+          el('span', { class: 'notif-item-type ' + typeClass }, typeLabel),
+          el('span', { class: 'notif-item-time' }, formatNotifTime(n.created_at))
+        ),
+        el('p', { class: 'notif-item-msg' }, n.message || ''),
+        metaText ? el('p', { class: 'notif-item-meta' }, metaText) : null,
+        n.project_name ? el('div', { class: 'notif-item-project' }, n.project_name) : null
+      )
+    ));
+  });
+}
+
+async function loadNotifications({ silent } = {}) {
+  if (!currentUser) return;
+  try {
+    const json = await getJSON(`${API}?op=notifications&limit=50`);
+    if (!json.ok) {
+      if (!silent) toast(json.error || 'Could not load notifications.');
+      return;
+    }
+    notificationsCache = Array.isArray(json.notifications) ? json.notifications : [];
+    updateNotifBadge(json.unread ?? notificationsCache.filter((n) => !n.is_read).length);
+    const overlay = document.getElementById('notif-drawer-overlay');
+    if (overlay && !overlay.hidden) renderNotificationsList();
+  } catch (err) {
+    if (!silent) toast('Could not load notifications.');
+  }
+}
+
+function openNotifDrawer() {
+  const overlay = document.getElementById('notif-drawer-overlay');
+  if (!overlay) return;
+  overlay.hidden = false;
+  renderNotificationsList();
+  loadNotifications();
+}
+
+function closeNotifDrawer() {
+  const overlay = document.getElementById('notif-drawer-overlay');
+  if (overlay) overlay.hidden = true;
+}
+
+async function markAllNotificationsRead() {
+  try {
+    const json = await postJSON(`${API}?op=notifications_read`, {});
+    if (!json.ok) {
+      toast(json.error || 'Could not mark as read.');
+      return;
+    }
+    notificationsCache = notificationsCache.map((n) => ({ ...n, is_read: true }));
+    updateNotifBadge(json.unread ?? 0);
+    renderNotificationsList();
+  } catch (err) {
+    toast('Could not mark as read.');
+  }
+}
+
+async function onNotificationClick(n) {
+  if (!n.is_read) {
+    try {
+      const json = await postJSON(`${API}?op=notifications_read`, { id: n.id });
+      if (json.ok) {
+        n.is_read = true;
+        updateNotifBadge(json.unread ?? Math.max(0, notifUnread - 1));
+        renderNotificationsList();
+      }
+    } catch (err) { /* ignore */ }
+  }
+
+  closeNotifDrawer();
+
+  if (n.project_id && n.project_id !== currentProjectId) {
+    await switchProject(n.project_id);
+  }
+  if (n.card_id) {
+    // Allow DOM to settle after project switch/render.
+    setTimeout(() => openModal(n.card_id), 50);
+  }
+}
+
+function startNotificationPolling() {
+  stopNotificationPolling();
+  loadNotifications({ silent: true });
+  notifPollTimer = setInterval(() => loadNotifications({ silent: true }), 30000);
+}
+
+function stopNotificationPolling() {
+  if (notifPollTimer) {
+    clearInterval(notifPollTimer);
+    notifPollTimer = null;
+  }
+}
+
+function wireNotifications() {
+  const bell = document.getElementById('btn-notifications');
+  const overlay = document.getElementById('notif-drawer-overlay');
+  const closeBtn = document.getElementById('notif-drawer-close');
+  const markAll = document.getElementById('notif-mark-all');
+  if (bell) bell.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openNotifDrawer();
+  });
+  if (closeBtn) closeBtn.addEventListener('click', closeNotifDrawer);
+  if (markAll) markAll.addEventListener('click', markAllNotificationsRead);
+  if (overlay) {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeNotifDrawer();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const ov = document.getElementById('notif-drawer-overlay');
+      if (ov && !ov.hidden) closeNotifDrawer();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 async function init() {
   wireAuth();
+  wireNotifications();
   initPasswordToggles();
   initBgTheme();
 
@@ -2065,6 +2282,7 @@ async function init() {
   if (me.ok && me.user) {
     applySession(me.user, me.csrf);
     showApp();
+    startNotificationPolling();
     initFlatpickr();
     await loadProjects();
     const saved = localStorage.getItem('tb_project');

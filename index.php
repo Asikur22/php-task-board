@@ -114,6 +114,13 @@
       <div class="header-actions">
         <button id="btn-add-list" class="btn btn-primary">+ Add list</button>
         <button id="btn-members" class="btn btn-ghost">👥 Members</button>
+        <button type="button" id="btn-notifications" class="notif-bell" title="Notifications" aria-label="Notifications" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <span id="notif-badge" class="notif-badge" hidden>0</span>
+        </button>
         <span class="user-chip" id="user-chip" title="Click to open profile" hidden>
           <span class="avatar" id="user-chip-avatar">
             <span id="user-chip-initials"></span>
@@ -433,7 +440,29 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <div id="app-version" class="app-version" title="Task Board Version">v1.10.10</div>
+  <div id="app-version" class="app-version" title="Task Board Version">v1.10.11</div>
+
+  <!-- Notifications drawer (slides in from the right) -->
+  <div id="notif-drawer-overlay" class="notif-drawer-overlay" hidden>
+    <aside id="notif-drawer" class="notif-drawer" role="dialog" aria-modal="true" aria-label="Notifications">
+      <header class="notif-drawer-header">
+        <div class="notif-drawer-heading">
+          <h2>Notifications</h2>
+          <p class="notif-drawer-sub">Comments &amp; checklist updates</p>
+        </div>
+        <div class="notif-drawer-actions">
+          <button type="button" id="notif-mark-all" class="btn btn-soft btn-sm">Mark all read</button>
+          <button type="button" id="notif-drawer-close" class="notif-drawer-close" aria-label="Close">&times;</button>
+        </div>
+      </header>
+      <div id="notif-drawer-list" class="notif-drawer-list"></div>
+      <div id="notif-drawer-empty" class="notif-drawer-empty" hidden>
+        <span class="notif-empty-icon" aria-hidden="true">◎</span>
+        <p>You're all caught up</p>
+        <span>New comments and completed checklist items will appear here.</span>
+      </div>
+    </aside>
+  </div>
 
   <script src="assets/app.js"></script>
 </body>

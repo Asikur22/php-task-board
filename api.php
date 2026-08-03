@@ -22,7 +22,7 @@ require __DIR__ . '/inc/auth.php';
 require_once __DIR__ . '/inc/sanitize.php';
 
 /** App semver — bump patch on each code change. */
-const APP_VERSION = '1.10.10';
+const APP_VERSION = '1.10.11';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -94,6 +94,66 @@ function col(PDO $pdo, string $sql, array $params = []): array
     $st = $pdo->prepare($sql);
     $st->execute($params);
     return $st->fetchAll(PDO::FETCH_COLUMN);
+}
+
+/**
+ * Notify every linked project member except the actor.
+ *
+ * @param array{type:string,message:string,card_id?:?string,meta?:?array} $payload
+ */
+function create_notifications(PDO $pdo, string $projectId, array $actor, array $payload): void
+{
+    $recipients = col(
+        $pdo,
+        'SELECT DISTINCT user_id FROM members WHERE project_id = ? AND user_id IS NOT NULL AND user_id != ?',
+        [$projectId, $actor['id']]
+    );
+    if (!$recipients) {
+        return;
+    }
+
+    $ins = $pdo->prepare(
+        'INSERT INTO notifications
+            (id, user_id, actor_id, actor_name, project_id, card_id, type, message, meta_json, is_read, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)'
+    );
+    $now  = gmdate('Y-m-d H:i:s');
+    $meta = isset($payload['meta']) ? json_encode($payload['meta'], JSON_UNESCAPED_UNICODE) : null;
+    $card = $payload['card_id'] ?? null;
+    $type = (string) ($payload['type'] ?? 'activity');
+    $msg  = (string) ($payload['message'] ?? 'New activity');
+
+    foreach ($recipients as $uid) {
+        $ins->execute([
+            'ntf_' . bin2hex(random_bytes(6)),
+            (string) $uid,
+            (string) $actor['id'],
+            (string) ($actor['name'] ?? 'Someone'),
+            $projectId,
+            $card,
+            $type,
+            $msg,
+            $meta,
+            $now,
+        ]);
+    }
+}
+
+/** Plain-text excerpt from rich HTML (for notification previews). */
+function plain_excerpt(string $html, int $max = 120): string
+{
+    $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $text = preg_replace('/\s+/u', ' ', trim($text)) ?? '';
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        if (mb_strlen($text) <= $max) {
+            return $text;
+        }
+        return rtrim(mb_substr($text, 0, $max - 1)) . '…';
+    }
+    if (strlen($text) <= $max) {
+        return $text;
+    }
+    return rtrim(substr($text, 0, $max - 1)) . '…';
 }
 
 $pdo = db();
@@ -619,17 +679,35 @@ try {
             if ($text === '') {
                 fail('Comment cannot be empty.');
             }
-            $st = $pdo->prepare('SELECT l.project_id FROM cards c JOIN lists l ON l.id = c.list_id WHERE c.id = ?');
+            $st = $pdo->prepare(
+                'SELECT c.title AS card_title, l.project_id
+                   FROM cards c
+                   JOIN lists l ON l.id = c.list_id
+                  WHERE c.id = ?'
+            );
             $st->execute([$cardId]);
-            $pid = $st->fetchColumn();
-            if (!$pid || membership($pdo, (string) $pid) === null) {
+            $cardRow = $st->fetch();
+            if (!$cardRow || membership($pdo, (string) $cardRow['project_id']) === null) {
                 fail('You do not have access to this card.', 403);
             }
+            $pid = (string) $cardRow['project_id'];
+            $cardTitle = (string) ($cardRow['card_title'] ?? 'Card');
 
             $id   = 'cmt_' . bin2hex(random_bytes(6));
             $now  = gmdate('Y-m-d H:i:s');
             $ins  = $pdo->prepare('INSERT INTO card_comments (id, card_id, user_id, author_name, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)');
             $ins->execute([$id, $cardId, $me['id'], $me['name'], $text, $now]);
+
+            $excerpt = plain_excerpt($text);
+            create_notifications($pdo, $pid, $me, [
+                'type'    => 'comment',
+                'card_id' => $cardId,
+                'message' => $me['name'] . ' commented on "' . $cardTitle . '"',
+                'meta'    => [
+                    'card_title' => $cardTitle,
+                    'excerpt'    => $excerpt,
+                ],
+            ]);
 
             $commentObj = [
                 'id'          => $id,
@@ -641,6 +719,70 @@ try {
             ];
 
             echo json_encode(['ok' => true, 'comment' => $commentObj]);
+            break;
+
+        case 'notifications': // list current user's notifications
+            $me = require_login();
+            $limit = max(1, min(100, (int) ($_GET['limit'] ?? 50)));
+            $st = $pdo->prepare(
+                'SELECT n.id, n.actor_id, n.actor_name, n.project_id, n.card_id, n.type,
+                        n.message, n.meta_json, n.is_read, n.created_at,
+                        u.photo_url AS actor_photo, p.name AS project_name
+                   FROM notifications n
+                   LEFT JOIN users u ON u.id = n.actor_id
+                   LEFT JOIN projects p ON p.id = n.project_id
+                  WHERE n.user_id = ?
+                  ORDER BY n.created_at DESC, n.id DESC
+                  LIMIT ?'
+            );
+            $st->bindValue(1, $me['id'], PDO::PARAM_STR);
+            $st->bindValue(2, $limit, PDO::PARAM_INT);
+            $st->execute();
+            $items = [];
+            foreach ($st->fetchAll() as $row) {
+                $meta = null;
+                if (!empty($row['meta_json'])) {
+                    $decoded = json_decode((string) $row['meta_json'], true);
+                    $meta = is_array($decoded) ? $decoded : null;
+                }
+                $items[] = [
+                    'id'           => $row['id'],
+                    'actor_id'     => $row['actor_id'],
+                    'actor_name'   => $row['actor_name'],
+                    'actor_photo'  => $row['actor_photo'] ?? null,
+                    'project_id'   => $row['project_id'],
+                    'project_name' => $row['project_name'] ?? null,
+                    'card_id'      => $row['card_id'],
+                    'type'         => $row['type'],
+                    'message'      => $row['message'],
+                    'meta'         => $meta,
+                    'is_read'      => !empty($row['is_read']),
+                    'created_at'   => $row['created_at'],
+                ];
+            }
+            $ust = $pdo->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0');
+            $ust->execute([$me['id']]);
+            $unread = (int) $ust->fetchColumn();
+
+            echo json_encode(['ok' => true, 'notifications' => $items, 'unread' => $unread]);
+            break;
+
+        case 'notifications_read': // {id?} mark one or all as read
+            $me = require_login();
+            if (!csrf_check()) {
+                fail('Bad CSRF token. Reload the page.', 419);
+            }
+            $nid = trim((string) (json_body()['id'] ?? ''));
+            if ($nid !== '') {
+                $pdo->prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?')
+                    ->execute([$nid, $me['id']]);
+            } else {
+                $pdo->prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0')
+                    ->execute([$me['id']]);
+            }
+            $ust = $pdo->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0');
+            $ust->execute([$me['id']]);
+            echo json_encode(['ok' => true, 'unread' => (int) $ust->fetchColumn()]);
             break;
 
         case 'comment_delete': // {comment_id}
@@ -870,6 +1012,20 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
         [$pid]
     );
 
+    // Snapshot checklist checked-state so we can notify on newly completed items.
+    $prevChecklist = [];
+    foreach (rows(
+        $pdo,
+        'SELECT chk.id, chk.checked
+           FROM card_checklists chk
+           JOIN cards cd ON cd.id = chk.card_id
+           JOIN lists l  ON l.id = cd.list_id
+          WHERE l.project_id = ?',
+        [$pid]
+    ) as $r) {
+        $prevChecklist[(string) $r['id']] = !empty($r['checked']);
+    }
+
     // Build the member roster that will be re-inserted.
     $toInsert = []; // member_id => payload row | null
     if ($isOwner) {
@@ -911,6 +1067,8 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
             $toInsert[$myMemberId] = null;
         }
     }
+
+    $newlyChecked = []; // [{card_id, card_title, item_id, text}]
 
     $pdo->beginTransaction();
     try {
@@ -967,9 +1125,10 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
 
             foreach (($l['cards'] ?? []) as $ci => $c) {
                 $cid = (string) ($c['id'] ?? '') ?: ('card_' . bin2hex(random_bytes(4)));
+                $cardTitle = (string) ($c['title'] ?? '');
                 $due = (!empty($c['due']) && is_string($c['due'])) ? (string) $c['due'] : null;
                 $desc = sanitize_rich_html((string) ($c['description'] ?? ''));
-                $insCard->execute([$cid, $lid, (string) ($c['title'] ?? ''), $desc, $due, (int) $ci]);
+                $insCard->execute([$cid, $lid, $cardTitle, $desc, $due, (int) $ci]);
                 $cardIds[$cid] = true;
 
                 foreach (($c['labels'] ?? []) as $lab) {
@@ -991,13 +1150,24 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
                 }
                 foreach (($c['checklist'] ?? []) as $chki => $chk) {
                     $chkid = (string) ($chk['id'] ?? '') ?: ('chk_' . bin2hex(random_bytes(4)));
+                    $chkText = (string) ($chk['text'] ?? '');
+                    $isChecked = !empty($chk['checked']);
                     $insChk->execute([
                         $chkid,
                         $cid,
-                        (string) ($chk['text'] ?? ''),
-                        !empty($chk['checked']) ? 1 : 0,
+                        $chkText,
+                        $isChecked ? 1 : 0,
                         (int) $chki,
                     ]);
+                    // Notify when an item becomes checked (was unchecked or new).
+                    if ($isChecked && empty($prevChecklist[$chkid])) {
+                        $newlyChecked[] = [
+                            'card_id'    => $cid,
+                            'card_title' => $cardTitle !== '' ? $cardTitle : 'Card',
+                            'item_id'    => $chkid,
+                            'text'       => $chkText !== '' ? $chkText : 'Checklist item',
+                        ];
+                    }
                 }
                 // Client-supplied comments are intentionally ignored.
             }
@@ -1025,6 +1195,21 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
             $pdo->rollBack();
         }
         throw $e;
+    }
+
+    // Notifications are written after a successful commit so a rolled-back
+    // save never leaves phantom activity in the inbox.
+    foreach ($newlyChecked as $item) {
+        create_notifications($pdo, $pid, $me, [
+            'type'    => 'checklist',
+            'card_id' => $item['card_id'],
+            'message' => $me['name'] . ' completed "' . $item['text'] . '" on "' . $item['card_title'] . '"',
+            'meta'    => [
+                'card_title' => $item['card_title'],
+                'item_text'  => $item['text'],
+                'item_id'    => $item['item_id'],
+            ],
+        ]);
     }
 }
 
