@@ -77,6 +77,18 @@ define(
     max(1, min(300, tb_env_int('NOTIFICATION_POLL_SECONDS', 2)))
 );
 
+/**
+ * When true, enable debug logging (e.g. AI Chat request/response → logs/).
+ * Keep false in production. Set via DEBUG in .env.
+ */
+define('DEBUG', tb_env_bool('DEBUG', false));
+
+/**
+ * How long the login session lasts (seconds). Default 15552000 = 180 days (6 months).
+ * Cookie Max-Age and session.gc_maxlifetime both use this value.
+ */
+define('SESSION_LIFETIME', max(3600, tb_env_int('SESSION_LIFETIME', 15552000)));
+
 require_once __DIR__ . '/mail.php';
 // ---- Session + CSRF --------------------------------------------------------
 
@@ -87,14 +99,35 @@ function auth_start_session(): void
         && strtolower((string) $_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') {
         $https = true;
     }
-    session_set_cookie_params([
-        'lifetime' => tb_env_int('SESSION_LIFETIME', 15552000),                 // session cookie — 6 months
+
+    // Keep server-side session files as long as the cookie (PHP default GC is ~24 min).
+    ini_set('session.gc_maxlifetime', (string) SESSION_LIFETIME);
+    ini_set('session.cookie_lifetime', (string) SESSION_LIFETIME);
+
+    $cookie = [
+        'lifetime' => SESSION_LIFETIME,
         'path'     => '/',
         'httponly' => true,              // not readable from JS
         'samesite' => 'Lax',             // mitigates CSRF on top-level navigations
         'secure'   => $https,            // HTTPS-only when the connection is HTTPS
-    ]);
-    session_start();
+    ];
+    session_set_cookie_params($cookie);
+
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        session_start();
+    }
+
+    // Sliding expiry: refresh the cookie on each request while logged in.
+    if (!empty($_SESSION['uid'])) {
+        setcookie((string) session_name(), (string) session_id(), [
+            'expires'  => time() + SESSION_LIFETIME,
+            'path'     => $cookie['path'],
+            'secure'   => $cookie['secure'],
+            'httponly' => $cookie['httponly'],
+            'samesite' => $cookie['samesite'],
+        ]);
+    }
+
     if (empty($_SESSION['csrf'])) {
         $_SESSION['csrf'] = bin2hex(random_bytes(32));
     }
@@ -226,6 +259,45 @@ function create_user(PDO $pdo, string $name, string $email, string $password, bo
     $pdo->prepare('INSERT INTO users (id, name, email, password_hash, email_verified_at) VALUES (?, ?, ?, ?, ?)')
         ->execute([$id, $name, $email, password_hash($password, PASSWORD_DEFAULT), $verifiedAt]);
     return $id;
+}
+
+/**
+ * Ensure a non-login bot account exists for AI-authored comments.
+ *
+ * @return array{id:string,name:string,email:string,photo_url:?string}
+ */
+function ensure_ai_chat_user(PDO $pdo): array
+{
+    $email = 'ai-chat@local.task-board';
+    $st = $pdo->prepare('SELECT id, name, email, photo_url FROM users WHERE email = ?');
+    $st->execute([$email]);
+    $row = $st->fetch();
+    if ($row) {
+        return [
+            'id'        => (string) $row['id'],
+            'name'      => (string) ($row['name'] ?: 'AI Chat'),
+            'email'     => (string) $row['email'],
+            'photo_url' => $row['photo_url'] ?? null,
+        ];
+    }
+
+    $id = 'user_ai_' . bin2hex(random_bytes(6));
+    $pdo->prepare(
+        'INSERT INTO users (id, name, email, password_hash, email_verified_at)
+         VALUES (?, ?, ?, ?, datetime(\'now\'))'
+    )->execute([
+        $id,
+        'AI Chat',
+        $email,
+        password_hash(bin2hex(random_bytes(24)), PASSWORD_DEFAULT),
+    ]);
+
+    return [
+        'id'        => $id,
+        'name'      => 'AI Chat',
+        'email'     => $email,
+        'photo_url' => null,
+    ];
 }
 
 function normalize_email(string $email): string
@@ -539,13 +611,11 @@ function seed_starter_project(PDO $pdo, string $userId): string
     $pdo->prepare('INSERT INTO projects (id, name, position) VALUES (?, ?, ?)')
         ->execute([$pid, 'My First Project', 0]);
 
-    $lid = 'list_' . bin2hex(random_bytes(4));
-    $pdo->prepare('INSERT INTO lists (id, project_id, title, position) VALUES (?, ?, ?, ?)')
-        ->execute([$lid, $pid, 'To Do', 0]);
+    $firstListId = insert_default_lists($pdo, $pid);
 
     $cid = 'card_' . bin2hex(random_bytes(4));
     $pdo->prepare('INSERT INTO cards (id, list_id, title, description, position) VALUES (?, ?, ?, ?, ?)')
-        ->execute([$cid, $lid, 'Welcome to your board', 'Invite teammates from the Members button, then assign them to cards.', 0]);
+        ->execute([$cid, $firstListId, 'Welcome to your board', 'Invite teammates from the Members button, then assign them to cards.', 0]);
 
     $pdo->prepare(
         "INSERT INTO members (id, project_id, name, color, position, user_id, role, email)

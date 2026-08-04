@@ -54,7 +54,10 @@ function sanitize_rich_html(string $raw): string
     }
 
     if (!preg_match('/<[a-z][\s\S]*>/i', $raw)) {
-        $escaped = htmlspecialchars($raw, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        // Decode first so re-saving never turns &apos; into &amp;apos;.
+        $plain = html_entity_decode($raw, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $plain = html_entity_decode($plain, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $escaped = htmlspecialchars($plain, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         return str_replace(["\r\n", "\r", "\n"], '<br>', $escaped);
     }
 

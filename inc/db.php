@@ -66,13 +66,15 @@ function db_init(PDO $pdo): void
             id         TEXT PRIMARY KEY,
             name       TEXT NOT NULL DEFAULT 'Project',
             position   INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS lists (
             id         TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
             title      TEXT NOT NULL DEFAULT 'List',
             position   INTEGER NOT NULL DEFAULT 0,
+            color      TEXT,
             FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS cards (
@@ -82,6 +84,7 @@ function db_init(PDO $pdo): void
             description TEXT NOT NULL DEFAULT '',
             due         TEXT,
             position    INTEGER NOT NULL DEFAULT 0,
+            updated_at  TEXT,
             FOREIGN KEY (list_id) REFERENCES lists(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS card_labels (
@@ -197,6 +200,12 @@ function db_init(PDO $pdo): void
     add_column_if_missing($pdo, 'members', 'role', "TEXT NOT NULL DEFAULT 'member'");
     add_column_if_missing($pdo, 'members', 'email', 'TEXT');
     add_column_if_missing($pdo, 'users', 'photo_url', 'TEXT');
+    add_column_if_missing($pdo, 'lists', 'color', 'TEXT');
+    add_column_if_missing($pdo, 'projects', 'updated_at', 'TEXT');
+    // Backfill any NULL updated_at values (ALTER cannot use datetime('now') default on older SQLite).
+    $pdo->exec("UPDATE projects SET updated_at = COALESCE(created_at, datetime('now')) WHERE updated_at IS NULL OR updated_at = ''");
+    add_column_if_missing($pdo, 'cards', 'updated_at', 'TEXT');
+    $pdo->exec("UPDATE cards SET updated_at = datetime('now') WHERE updated_at IS NULL OR updated_at = ''");
     // One-shot: when the verification column is first added, treat existing
     // accounts as already verified. Do NOT re-run on every request.
     $addedVerified = add_column_if_missing($pdo, 'users', 'email_verified_at', 'TEXT');
@@ -213,6 +222,45 @@ function db_init(PDO $pdo): void
 }
 
 /**
+ * Default kanban columns for a brand-new project (title + accent color).
+ *
+ * @return list<array{title:string,color:string}>
+ */
+function default_board_lists(): array
+{
+    return [
+        ['title' => 'To Do',       'color' => '#3b82f6'],
+        ['title' => 'In Progress', 'color' => '#f59e0b'],
+        ['title' => 'On Hold',     'color' => '#64748b'],
+        ['title' => 'In Review',   'color' => '#0d9488'],
+        ['title' => 'Completed',   'color' => '#16a34a'],
+    ];
+}
+
+/** True when $color looks like #RRGGBB. */
+function is_hex_color(?string $color): bool
+{
+    return is_string($color) && (bool) preg_match('/^#[0-9A-Fa-f]{6}$/', $color);
+}
+
+/** Insert the default status lists into a project. Returns the first list id. */
+function insert_default_lists(PDO $pdo, string $projectId): string
+{
+    $ins = $pdo->prepare(
+        'INSERT INTO lists (id, project_id, title, position, color) VALUES (?, ?, ?, ?, ?)'
+    );
+    $firstId = '';
+    foreach (default_board_lists() as $i => $list) {
+        $lid = 'list_' . bin2hex(random_bytes(4));
+        if ($firstId === '') {
+            $firstId = $lid;
+        }
+        $ins->execute([$lid, $projectId, $list['title'], $i, $list['color']]);
+    }
+    return $firstId;
+}
+
+/**
  * Seed a minimal first project when the database is brand new and empty.
  */
 function db_seed_default(PDO $pdo): void
@@ -221,11 +269,9 @@ function db_seed_default(PDO $pdo): void
     $pdo->prepare('INSERT INTO projects (id, name, position) VALUES (?, ?, ?)')
         ->execute([$pid, 'My First Project', 0]);
 
-    $lid = 'list_' . bin2hex(random_bytes(4));
-    $pdo->prepare('INSERT INTO lists (id, project_id, title, position) VALUES (?, ?, ?, ?)')
-        ->execute([$lid, $pid, 'To Do', 0]);
+    $firstListId = insert_default_lists($pdo, $pid);
 
     $cid = 'card_' . bin2hex(random_bytes(4));
     $pdo->prepare('INSERT INTO cards (id, list_id, title, description, position) VALUES (?, ?, ?, ?, ?)')
-        ->execute([$cid, $lid, 'Welcome to your board', 'Switch projects from the dropdown, or create a new one with +.', 0]);
+        ->execute([$cid, $firstListId, 'Welcome to your board', 'Switch projects from the dropdown, or create a new one with +.', 0]);
 }

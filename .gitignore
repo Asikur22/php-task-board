@@ -9,11 +9,16 @@
 # migrations files
 migrations/*
 
-# SQLite runtime files
-database/data.db
-database/data.db-shm
-database/data.db-wal
+# database files
+database/*
+!database/.htaccess
 
 # Uploaded images (optional — keep if you don't want binaries in git)
 uploads/*
 !uploads/.htaccess
+
+# debug logs (never commit)
+logs/
+*.log
+!logs/.htaccess
+!logs/index.php

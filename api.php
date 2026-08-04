@@ -167,6 +167,7 @@ try {
             $me = current_user();
             $pollCfg = [
                 'notification_poll_seconds' => NOTIFICATION_POLL_SECONDS,
+                'debug' => DEBUG,
             ];
             if ($me === null) {
                 echo json_encode([
@@ -448,6 +449,7 @@ try {
                     'mem_' . bin2hex(random_bytes(6)), $id,
                     $me['name'], '#2563eb', 0, $me['id'], $me['email'],
                 ]);
+                insert_default_lists($pdo, $id);
                 $pdo->commit();
             } catch (Throwable $e) {
                 if ($pdo->inTransaction()) {
@@ -515,7 +517,26 @@ try {
             $pid = (string) ($_GET['project'] ?? '');
             save_board($pdo, $pid, json_body(), $me);
             gc_uploads($pdo);
-            echo json_encode(['ok' => true]);
+            $updatedAt = touch_project($pdo, $pid);
+            // save_board stores conflict-merge results on the request scope via $GLOBALS
+            $protected = $GLOBALS['tb_protected_cards'] ?? [];
+            unset($GLOBALS['tb_protected_cards']);
+            echo json_encode([
+                'ok' => true,
+                'updated_at' => $updatedAt,
+                'protected_cards' => array_values($protected),
+            ], JSON_UNESCAPED_SLASHES);
+            break;
+
+        case 'board_sync': // GET ?project=ID&since=UTC — incremental card/list sync
+            $me = require_login();
+            $pid = trim((string) ($_GET['project'] ?? ''));
+            if ($pid === '') {
+                fail('Project id is required.');
+            }
+            require_membership($pdo, $pid);
+            $since = trim((string) ($_GET['since'] ?? ''));
+            echo json_encode(['ok' => true, 'data' => load_board_sync($pdo, $pid, $me, $since)], JSON_UNESCAPED_SLASHES);
             break;
 
         case 'invite': // {project,email} — invite a registered user to a project
@@ -561,7 +582,7 @@ try {
             echo json_encode(['ok' => true, 'member' => [
                 'id' => $mid, 'name' => $invitee['name'], 'color' => $color,
                 'role' => 'member', 'email' => $email, 'is_you' => false,
-            ]]);
+            ], 'updated_at' => touch_project($pdo, $pid)]);
             break;
 
         case 'leave_project': // {project} — a non-owner leaves
@@ -716,10 +737,121 @@ try {
                 'created_at'  => $now,
             ];
 
-            echo json_encode(['ok' => true, 'comment' => $commentObj]);
+            echo json_encode(['ok' => true, 'comment' => $commentObj, 'updated_at' => touch_project($pdo, $pid)]);
             break;
 
-        case 'notifications': // list current user's notifications
+        case 'ai_comment_add': // {card_id, comment} — authored by the AI Chat bot user
+            $me = require_login();
+            if (!csrf_check()) {
+                fail('Bad CSRF token. Reload the page.', 419);
+            }
+            $b      = json_body();
+            $cardId = trim((string) ($b['card_id'] ?? ''));
+            $text   = sanitize_rich_html((string) ($b['comment'] ?? ''));
+            if ($cardId === '') {
+                fail('Card id is required.');
+            }
+            if ($text === '') {
+                fail('Comment cannot be empty.');
+            }
+            $st = $pdo->prepare(
+                'SELECT c.title AS card_title, l.project_id
+                   FROM cards c
+                   JOIN lists l ON l.id = c.list_id
+                  WHERE c.id = ?'
+            );
+            $st->execute([$cardId]);
+            $cardRow = $st->fetch();
+            if (!$cardRow || membership($pdo, (string) $cardRow['project_id']) === null) {
+                fail('You do not have access to this card.', 403);
+            }
+            $pid = (string) $cardRow['project_id'];
+            $cardTitle = (string) ($cardRow['card_title'] ?? 'Card');
+            $bot = ensure_ai_chat_user($pdo);
+
+            $id   = 'cmt_' . bin2hex(random_bytes(6));
+            $now  = gmdate('Y-m-d H:i:s');
+            $ins  = $pdo->prepare('INSERT INTO card_comments (id, card_id, user_id, author_name, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+            $ins->execute([$id, $cardId, $bot['id'], $bot['name'], $text, $now]);
+
+            $excerpt = plain_excerpt($text);
+            create_notifications($pdo, $pid, $bot, [
+                'type'    => 'comment',
+                'card_id' => $cardId,
+                'message' => $bot['name'] . ' commented on "' . $cardTitle . '"',
+                'meta'    => [
+                    'card_title' => $cardTitle,
+                    'excerpt'    => $excerpt,
+                ],
+            ]);
+
+            echo json_encode([
+                'ok'      => true,
+                'comment' => [
+                    'id'          => $id,
+                    'user_id'     => $bot['id'],
+                    'author_name' => $bot['name'],
+                    'photo_url'   => $bot['photo_url'],
+                    'comment'     => $text,
+                    'created_at'  => $now,
+                ],
+                'updated_at' => touch_project($pdo, $pid),
+            ]);
+            break;
+
+        case 'ai_debug_log': // {provider, model, request, response, error?, project_id?}
+            $me = require_login();
+            if (!csrf_check()) {
+                fail('Bad CSRF token. Reload the page.', 419);
+            }
+            if (!DEBUG) {
+                echo json_encode(['ok' => true, 'skipped' => true]);
+                break;
+            }
+            $b = json_body();
+            $logDir = __DIR__ . '/logs';
+            if (!is_dir($logDir) && !@mkdir($logDir, 0775, true)) {
+                fail('Could not create logs directory.', 500);
+            }
+            if (!is_writable($logDir)) {
+                fail('logs/ directory is not writable.', 500);
+            }
+
+            $provider = substr(trim((string) ($b['provider'] ?? 'unknown')), 0, 64);
+            $model    = substr(trim((string) ($b['model'] ?? 'unknown')), 0, 128);
+            $entry = [
+                'ts'         => gmdate('c'),
+                'user_id'    => $me['id'],
+                'user_name'  => $me['name'] ?? null,
+                'project_id' => isset($b['project_id']) ? substr((string) $b['project_id'], 0, 64) : null,
+                'provider'   => $provider,
+                'model'      => $model,
+                'request'    => $b['request'] ?? null,
+                'response'   => $b['response'] ?? null,
+                'error'      => isset($b['error']) ? substr((string) $b['error'], 0, 2000) : null,
+            ];
+            // Cap payload size so a runaway model dump can't fill the disk.
+            $line = json_encode($entry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($line === false) {
+                fail('Could not encode debug log.');
+            }
+            if (strlen($line) > 200_000) {
+                $entry['response'] = '[truncated]';
+                $entry['request'] = is_array($entry['request'])
+                    ? array_merge($entry['request'], ['_truncated' => true])
+                    : '[truncated]';
+                $line = json_encode($entry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+
+            $file = $logDir . '/ai-chat-' . gmdate('Y-m-d') . '.log';
+            $ok = @file_put_contents($file, $line . "\n", FILE_APPEND | LOCK_EX);
+            if ($ok === false) {
+                fail('Could not write AI debug log.', 500);
+            }
+            echo json_encode(['ok' => true]);
+            break;
+
+        case 'notifications': // list current user's notifications (+ optional board sync stamp)
             $me = require_login();
             $limit = max(1, min(100, (int) ($_GET['limit'] ?? 50)));
             $st = $pdo->prepare(
@@ -762,7 +894,16 @@ try {
             $ust->execute([$me['id']]);
             $unread = (int) $ust->fetchColumn();
 
-            echo json_encode(['ok' => true, 'notifications' => $items, 'unread' => $unread]);
+            $payload = ['ok' => true, 'notifications' => $items, 'unread' => $unread];
+
+            // Cheap board sync stamp for the open project (same poll as notifications).
+            $syncPid = trim((string) ($_GET['project'] ?? ''));
+            if ($syncPid !== '' && membership($pdo, $syncPid) !== null) {
+                $payload['board_updated_at'] = project_updated_at($pdo, $syncPid);
+                $payload['project_id'] = $syncPid;
+            }
+
+            echo json_encode($payload);
             break;
 
         case 'notifications_read': // {id?} mark one or all as read
@@ -809,7 +950,7 @@ try {
             }
 
             $pdo->prepare('DELETE FROM card_comments WHERE id = ?')->execute([$cid]);
-            echo json_encode(['ok' => true]);
+            echo json_encode(['ok' => true, 'updated_at' => touch_project($pdo, (string) $row['project_id'])]);
             break;
 
         case 'upload': // multipart/form-data, field "file" = image
@@ -875,17 +1016,52 @@ try {
 // ---------------------------------------------------------------------------
 // Board load: assemble one project's board from its rows.
 // ---------------------------------------------------------------------------
+
+/** Bump projects.updated_at and return the new UTC stamp. */
+function touch_project(PDO $pdo, string $pid): string
+{
+    $now = gmdate('Y-m-d H:i:s');
+    if ($pid === '') {
+        return $now;
+    }
+    $pdo->prepare('UPDATE projects SET updated_at = ? WHERE id = ?')->execute([$now, $pid]);
+    return $now;
+}
+
+/** Current projects.updated_at (or now if missing). */
+function project_updated_at(PDO $pdo, string $pid): string
+{
+    if ($pid === '') {
+        return gmdate('Y-m-d H:i:s');
+    }
+    $st = $pdo->prepare('SELECT updated_at FROM projects WHERE id = ?');
+    $st->execute([$pid]);
+    $v = $st->fetchColumn();
+    if ($v === false || $v === null || $v === '') {
+        return touch_project($pdo, $pid);
+    }
+    return (string) $v;
+}
+
 function load_board(PDO $pdo, string $pid, array $me): array
 {
     if ($pid === '') {
-        return ['title' => '', 'members' => [], 'lists' => [], 'current_member_id' => null, 'current_role' => null];
+        return [
+            'title' => '', 'members' => [], 'lists' => [],
+            'current_member_id' => null, 'current_role' => null, 'updated_at' => null,
+        ];
     }
 
-    $st = $pdo->prepare('SELECT name FROM projects WHERE id = ?');
+    $st = $pdo->prepare('SELECT name, updated_at FROM projects WHERE id = ?');
     $st->execute([$pid]);
-    $name = $st->fetchColumn();
-    if ($name === false) {
+    $proj = $st->fetch();
+    if ($proj === false) {
         fail('Project not found.', 404);
+    }
+    $name = (string) $proj['name'];
+    $updatedAt = (string) ($proj['updated_at'] ?? '');
+    if ($updatedAt === '') {
+        $updatedAt = touch_project($pdo, $pid);
     }
 
     $members       = [];
@@ -914,8 +1090,14 @@ function load_board(PDO $pdo, string $pid, array $me): array
     }
 
     $lists = [];
-    foreach (rows($pdo, 'SELECT id, title FROM lists WHERE project_id = ? ORDER BY position', [$pid]) as $l) {
-        $lists[] = ['id' => $l['id'], 'title' => $l['title'], 'cards' => load_cards($pdo, $l['id'])];
+    foreach (rows($pdo, 'SELECT id, title, color FROM lists WHERE project_id = ? ORDER BY position', [$pid]) as $l) {
+        $color = is_hex_color($l['color'] ?? null) ? (string) $l['color'] : null;
+        $lists[] = [
+            'id'    => $l['id'],
+            'title' => $l['title'],
+            'color' => $color,
+            'cards' => load_cards($pdo, $l['id']),
+        ];
     }
 
     return [
@@ -924,50 +1106,118 @@ function load_board(PDO $pdo, string $pid, array $me): array
         'lists'             => $lists,
         'current_member_id' => $currentMember,
         'current_role'      => $currentRole,
+        'updated_at'        => $updatedAt,
     ];
 }
 
 function load_cards(PDO $pdo, string $listId): array
 {
     $out = [];
-    foreach (rows($pdo, 'SELECT id, title, description, due FROM cards WHERE list_id = ? ORDER BY position', [$listId]) as $c) {
-        $checklist = [];
-        foreach (rows($pdo, 'SELECT id, text, checked FROM card_checklists WHERE card_id = ? ORDER BY position', [$c['id']]) as $chk) {
-            $checklist[] = [
-                'id'      => $chk['id'],
-                'text'    => $chk['text'],
-                'checked' => (bool) $chk['checked'],
-            ];
-        }
-        $comments = [];
-        $cSql = 'SELECT c.id, c.user_id, c.author_name, u.photo_url, c.comment, c.created_at
-                   FROM card_comments c
-              LEFT JOIN users u ON u.id = c.user_id
-                  WHERE c.card_id = ?
-               ORDER BY c.created_at ASC';
-        foreach (rows($pdo, $cSql, [$c['id']]) as $cmt) {
-            $comments[] = [
-                'id'          => $cmt['id'],
-                'user_id'     => $cmt['user_id'],
-                'author_name' => $cmt['author_name'],
-                'photo_url'   => $cmt['photo_url'] ?? null,
-                'comment'     => $cmt['comment'],
-                'created_at'  => $cmt['created_at'],
-            ];
-        }
-        $out[] = [
-            'id'          => $c['id'],
-            'title'       => $c['title'],
-            'description' => $c['description'],
-            'due'         => $c['due'],
-            'labels'      => col($pdo, 'SELECT label FROM card_labels WHERE card_id = ?', [$c['id']]),
-            'members'     => col($pdo, 'SELECT member_id FROM card_members WHERE card_id = ?', [$c['id']]),
-            'images'      => rows($pdo, 'SELECT id, url, name FROM images WHERE card_id = ? ORDER BY position', [$c['id']]),
-            'checklist'   => $checklist,
-            'comments'    => $comments,
-        ];
+    foreach (rows($pdo, 'SELECT id, title, description, due, updated_at FROM cards WHERE list_id = ? ORDER BY position', [$listId]) as $c) {
+        $out[] = hydrate_card_row($pdo, $c, $listId, null);
     }
     return $out;
+}
+
+/**
+ * Full card payload from a cards row (+ list_id / optional position).
+ *
+ * @param array<string,mixed> $c
+ * @return array<string,mixed>
+ */
+function hydrate_card_row(PDO $pdo, array $c, ?string $listId = null, ?int $position = null): array
+{
+    $cid = (string) $c['id'];
+    $checklist = [];
+    foreach (rows($pdo, 'SELECT id, text, checked FROM card_checklists WHERE card_id = ? ORDER BY position', [$cid]) as $chk) {
+        $checklist[] = [
+            'id'      => $chk['id'],
+            'text'    => $chk['text'],
+            'checked' => (bool) $chk['checked'],
+        ];
+    }
+    $comments = [];
+    $cSql = 'SELECT c.id, c.user_id, c.author_name, u.photo_url, c.comment, c.created_at
+               FROM card_comments c
+          LEFT JOIN users u ON u.id = c.user_id
+              WHERE c.card_id = ?
+           ORDER BY c.created_at ASC';
+    foreach (rows($pdo, $cSql, [$cid]) as $cmt) {
+        $comments[] = [
+            'id'          => $cmt['id'],
+            'user_id'     => $cmt['user_id'],
+            'author_name' => $cmt['author_name'],
+            'photo_url'   => $cmt['photo_url'] ?? null,
+            'comment'     => $cmt['comment'],
+            'created_at'  => $cmt['created_at'],
+        ];
+    }
+    $card = [
+        'id'          => $cid,
+        'title'       => $c['title'],
+        'description' => $c['description'],
+        'due'         => $c['due'],
+        'updated_at'  => $c['updated_at'] ?? null,
+        'labels'      => col($pdo, 'SELECT label FROM card_labels WHERE card_id = ?', [$cid]),
+        'members'     => col($pdo, 'SELECT member_id FROM card_members WHERE card_id = ?', [$cid]),
+        'images'      => rows($pdo, 'SELECT id, url, name FROM images WHERE card_id = ? ORDER BY position', [$cid]),
+        'checklist'   => $checklist,
+        'comments'    => $comments,
+    ];
+    if ($listId !== null) {
+        $card['list_id'] = $listId;
+    }
+    if ($position !== null) {
+        $card['position'] = $position;
+    }
+    return $card;
+}
+
+/**
+ * Incremental sync payload: list skeleton + cards changed since $since.
+ *
+ * @return array<string,mixed>
+ */
+function load_board_sync(PDO $pdo, string $pid, array $me, string $since): array
+{
+    $board = load_board($pdo, $pid, $me);
+    $lists = [];
+    $cardIds = [];
+    $changed = [];
+
+    foreach (($board['lists'] ?? []) as $li => $l) {
+        $lists[] = [
+            'id'       => $l['id'],
+            'title'    => $l['title'],
+            'color'    => $l['color'] ?? null,
+            'position' => (int) $li,
+        ];
+        foreach (($l['cards'] ?? []) as $ci => $c) {
+            $cid = (string) ($c['id'] ?? '');
+            if ($cid === '') {
+                continue;
+            }
+            $cardIds[] = $cid;
+            $ts = (string) ($c['updated_at'] ?? '');
+            // First sync (empty since) or card newer than client stamp.
+            if ($since === '' || $ts === '' || $ts > $since) {
+                $c['list_id'] = $l['id'];
+                $c['position'] = (int) $ci;
+                $changed[] = $c;
+            }
+        }
+    }
+
+    return [
+        'updated_at' => $board['updated_at'] ?? null,
+        'title'      => $board['title'] ?? '',
+        'members'    => $board['members'] ?? [],
+        'lists'      => $lists,
+        'cards'      => $changed,
+        'card_ids'   => $cardIds,
+        'current_member_id' => $board['current_member_id'] ?? null,
+        'current_role'      => $board['current_role'] ?? null,
+    ];
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1273,26 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
     ) as $r) {
         $prevChecklist[(string) $r['id']] = !empty($r['checked']);
     }
+
+    // Snapshot cards for conflict merge (keep newer remote content if client is stale).
+    $serverCardsById = [];
+    foreach (rows(
+        $pdo,
+        'SELECT c.id, c.list_id, c.title, c.description, c.due, c.position, c.updated_at
+           FROM cards c
+           JOIN lists l ON l.id = c.list_id
+          WHERE l.project_id = ?',
+        [$pid]
+    ) as $row) {
+        $cid = (string) $row['id'];
+        $serverCardsById[$cid] = hydrate_card_row(
+            $pdo,
+            $row,
+            (string) $row['list_id'],
+            (int) $row['position']
+        );
+    }
+    $protectedCards = [];
 
     // Build the member roster that will be re-inserted.
     $toInsert = []; // member_id => payload row | null
@@ -1080,8 +1350,8 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
         $pdo->prepare('DELETE FROM members WHERE project_id = ?')->execute([$pid]);
 
         $insMem   = $pdo->prepare('INSERT INTO members (id, project_id, name, color, position, user_id, role, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-        $insList  = $pdo->prepare('INSERT INTO lists (id, project_id, title, position) VALUES (?, ?, ?, ?)');
-        $insCard  = $pdo->prepare('INSERT INTO cards (id, list_id, title, description, due, position) VALUES (?, ?, ?, ?, ?, ?)');
+        $insList  = $pdo->prepare('INSERT INTO lists (id, project_id, title, position, color) VALUES (?, ?, ?, ?, ?)');
+        $insCard  = $pdo->prepare('INSERT INTO cards (id, list_id, title, description, due, position, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
         $insLabel = $pdo->prepare('INSERT INTO card_labels (card_id, label) VALUES (?, ?)');
         $insCM    = $pdo->prepare('INSERT INTO card_members (card_id, member_id) VALUES (?, ?)');
         $insImg   = $pdo->prepare('INSERT INTO images (id, card_id, url, name, position) VALUES (?, ?, ?, ?, ?)');
@@ -1119,14 +1389,31 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
 
         foreach (($data['lists'] ?? []) as $li => $l) {
             $lid = (string) ($l['id'] ?? '') ?: ('list_' . bin2hex(random_bytes(4)));
-            $insList->execute([$lid, $pid, (string) ($l['title'] ?? 'List'), (int) $li]);
+            $listColor = is_hex_color(isset($l['color']) ? (string) $l['color'] : null)
+                ? (string) $l['color']
+                : null;
+            $insList->execute([$lid, $pid, (string) ($l['title'] ?? 'List'), (int) $li, $listColor]);
 
             foreach (($l['cards'] ?? []) as $ci => $c) {
                 $cid = (string) ($c['id'] ?? '') ?: ('card_' . bin2hex(random_bytes(4)));
+                $clientTs = trim((string) ($c['updated_at'] ?? ''));
+                $serverCard = $serverCardsById[$cid] ?? null;
+                $serverTs = is_array($serverCard) ? trim((string) ($serverCard['updated_at'] ?? '')) : '';
+                $useServer = $serverCard && $serverTs !== '' && ($clientTs === '' || $serverTs > $clientTs);
+                if ($useServer) {
+                    // Remote wins on content; keep this list placement from the client save.
+                    $c = $serverCard;
+                    $protectedCards[$cid] = $serverCard;
+                    $protectedCards[$cid]['list_id'] = $lid;
+                    $protectedCards[$cid]['position'] = (int) $ci;
+                }
                 $cardTitle = (string) ($c['title'] ?? '');
                 $due = (!empty($c['due']) && is_string($c['due'])) ? (string) $c['due'] : null;
                 $desc = sanitize_rich_html((string) ($c['description'] ?? ''));
-                $insCard->execute([$cid, $lid, $cardTitle, $desc, $due, (int) $ci]);
+                $cardUpdatedAt = $useServer
+                    ? $serverTs
+                    : gmdate('Y-m-d H:i:s');
+                $insCard->execute([$cid, $lid, $cardTitle, $desc, $due, (int) $ci, $cardUpdatedAt]);
                 $cardIds[$cid] = true;
 
                 foreach (($c['labels'] ?? []) as $lab) {
@@ -1194,6 +1481,8 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
         }
         throw $e;
     }
+
+    $GLOBALS['tb_protected_cards'] = array_values($protectedCards);
 
     // Notifications are written after a successful commit so a rolled-back
     // save never leaves phantom activity in the inbox.

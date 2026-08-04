@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/style.css?v=1.10.21">
+  <link rel="stylesheet" href="assets/style.css?v=1.10.47">
   <!-- Flatpickr date picker -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
@@ -112,7 +112,7 @@
       </div>
       <h1 id="board-title" contenteditable="true" spellcheck="false">Task Board</h1>
       <div class="header-actions">
-        <button id="btn-add-list" class="btn btn-primary">+ Add list</button>
+        <button type="button" id="btn-ai-chat" class="btn btn-ghost" title="Create cards from a client message">✨ AI Chat</button>
         <button id="btn-members" class="btn btn-ghost">👥 Members</button>
         <button type="button" id="btn-notifications" class="notif-bell" title="Notifications" aria-label="Notifications" hidden>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -296,6 +296,45 @@
       </div>
     </div>
 
+    <!-- AI Chat: client message → todo cards -->
+    <div id="ai-chat-modal" class="modal-overlay" hidden>
+      <div class="modal ai-chat-modal" role="dialog" aria-modal="true" aria-label="AI Chat">
+        <button type="button" id="ai-chat-close" class="modal-close" aria-label="Close">&times;</button>
+        <h2 class="modal-heading">AI Chat</h2>
+        <p class="modal-hint">Paste a client message. Parent topics become cards (with checklists). Deadlines and AI notes are applied when mentioned.</p>
+
+        <div class="ai-chat-layout" id="ai-chat-layout">
+          <div class="ai-chat-main">
+            <label class="modal-label" for="ai-chat-message">Client message</label>
+            <textarea id="ai-chat-message" class="ai-chat-textarea" rows="10" maxlength="8000" placeholder="Paste or type the client email / brief here…"></textarea>
+
+            <label class="modal-label" for="ai-chat-list">Add cards to list</label>
+            <select id="ai-chat-list" class="ai-chat-select" aria-label="Target list"></select>
+
+            <p id="ai-chat-status" class="ai-chat-status" role="status" aria-live="polite"></p>
+            <div id="ai-chat-progress-wrap" class="ai-chat-progress-wrap" hidden>
+              <div id="ai-chat-progress-fill" class="ai-chat-progress-fill"></div>
+            </div>
+
+            <div class="modal-footer ai-chat-footer">
+              <button type="button" id="ai-chat-cancel" class="btn btn-soft">Cancel</button>
+              <button type="button" id="ai-chat-generate" class="btn btn-primary">Generate</button>
+            </div>
+          </div>
+
+          <aside id="ai-chat-side" class="ai-chat-side" aria-label="Proposed todos" hidden>
+            <div id="ai-chat-preview" class="ai-chat-preview">
+              <span class="modal-label">Proposed todos</span>
+              <ul id="ai-chat-preview-list" class="ai-chat-preview-list"></ul>
+            </div>
+            <div class="ai-chat-side-footer">
+              <button type="button" id="ai-chat-add" class="btn btn-primary" hidden>Add cards</button>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+
     <!-- Member roster manager -->
     <div id="members-modal" class="modal-overlay" hidden>
       <div class="modal modal-sm" role="dialog" aria-modal="true" aria-label="Manage members">
@@ -423,6 +462,14 @@
           </div>
           <button id="btn-logout" class="btn btn-danger btn-block" type="button">Log out</button>
         </div>
+
+        <hr class="modal-divider">
+
+        <div class="profile-actions-section profile-ai-cache-section">
+          <span class="modal-label">AI Model Cache (WebLLM)</span>
+          <p class="modal-hint ai-cache-hint" id="profile-ai-cache-status">Checking cache size…</p>
+          <button id="btn-clear-ai-cache" class="btn btn-soft btn-sm btn-block" type="button" disabled>Clear AI cache</button>
+        </div>
       </div>
     </div>
   </div>
@@ -440,7 +487,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <div id="app-version" class="app-version" title="Task Board Version">v1.10.21</div>
+  <div id="app-version" class="app-version" title="Task Board Version">v1.10.47</div>
 
   <!-- Notifications drawer (slides in from the right) -->
   <div id="notif-drawer-overlay" class="notif-drawer-overlay" hidden>
@@ -464,6 +511,7 @@
     </aside>
   </div>
 
-  <script src="assets/app.js?v=1.10.21"></script>
+  <script src="assets/app.js?v=1.10.47"></script>
+  <script src="assets/ai-chat.js?v=1.10.47"></script>
 </body>
 </html>

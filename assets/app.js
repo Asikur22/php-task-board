@@ -79,6 +79,37 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+/**
+ * Paste as plain text into single-line contenteditable titles.
+ * Strips HTML/fonts/colors from Word, browsers, etc.
+ */
+function pastePlainText(e) {
+  e.preventDefault();
+  const raw = (e.clipboardData || window.clipboardData)?.getData('text/plain') ?? '';
+  const text = String(raw).replace(/\s+/g, ' ');
+  if (!text) return;
+  if (typeof document.execCommand === 'function') {
+    document.execCommand('insertText', false, text);
+    return;
+  }
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  sel.deleteFromDocument();
+  const range = sel.getRangeAt(0);
+  range.insertNode(document.createTextNode(text));
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/** Flatten any leftover markup in a contenteditable title to plain text. */
+function flattenEditableText(node, fallback) {
+  const v = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+  const next = v || fallback;
+  node.textContent = next;
+  return next;
+}
+
 // ---------------------------------------------------------------------------
 // Description rich-text helpers (strict allowlist — no raw HTML injection)
 // ---------------------------------------------------------------------------
@@ -93,6 +124,36 @@ const DESC_ALLOWED = {
 
 function looksLikeHtml(str) {
   return /<[a-z][\s\S]*>/i.test(String(str || ''));
+}
+
+/**
+ * Decode HTML entities (and unwind double-encoding like &amp;apos;) without innerHTML.
+ */
+function decodeHtmlEntitiesDeep(str) {
+  let s = String(str ?? '');
+  const named = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0',
+  };
+  const decodeOnce = (input) => input
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, body) => {
+      const key = String(body || '');
+      if (key[0] === '#') {
+        const code = key[1] === 'x' || key[1] === 'X'
+          ? parseInt(key.slice(2), 16)
+          : parseInt(key.slice(1), 10);
+        if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return entity;
+        try { return String.fromCodePoint(code); } catch (_) { return entity; }
+      }
+      const mapped = named[key.toLowerCase()];
+      return mapped !== undefined ? mapped : entity;
+    });
+  for (let i = 0; i < 3; i++) {
+    if (!/&(?:#x?[0-9a-f]+|[a-z]+);/i.test(s)) break;
+    const next = decodeOnce(s);
+    if (next === s) break;
+    s = next;
+  }
+  return s;
 }
 
 /** Escape plain text and turn newlines into <br> nodes under `parent`. */
@@ -146,8 +207,14 @@ function appendSanitizedChildren(sourceParent, targetParent) {
  */
 function fillSanitizedDesc(target, raw) {
   target.replaceChildren();
-  const src = String(raw || '');
+  let src = String(raw || '');
   if (!src.trim()) return false;
+
+  // Descriptions are often stored entity-escaped; decode first so we don't
+  // turn platform&apos;s into platform&amp;apos;s on the next serialize.
+  if (!looksLikeHtml(src) || /&(?:amp|apos|quot|lt|gt|#\d+|#x[0-9a-f]+);/i.test(src)) {
+    src = decodeHtmlEntitiesDeep(src);
+  }
 
   if (!looksLikeHtml(src)) {
     appendPlainTextAsNodes(target, src);
@@ -228,7 +295,7 @@ function saveDescEdit() {
   const card = findCardAnywhere(editing.cardId);
   if (card) {
     card.description = editing.description;
-    save();
+    save(editing.cardId);
   }
   showDescView();
 }
@@ -517,7 +584,10 @@ async function afterAuth(json) {
   showApp();
   try {
     const cfg = await getJSON(`${API}?op=me`);
-    if (cfg && cfg.ok) applyNotificationPollConfig(cfg.notification_poll_seconds);
+    if (cfg && cfg.ok) {
+      applyNotificationPollConfig(cfg.notification_poll_seconds);
+      applyDebugConfig(cfg.debug);
+    }
   } catch (err) { /* keep default */ }
   startNotificationPolling();
   await loadProjects();
@@ -658,6 +728,7 @@ async function loadBoard() {
       board = normalize(json.data);
       board.currentMemberId = json.data.current_member_id || null;
       board.currentRole = json.data.current_role || null;
+      boardUpdatedAt = json.data.updated_at || null;
     }
   } catch (err) {
     toast('Could not load this project.');
@@ -666,12 +737,16 @@ async function loadBoard() {
 }
 
 async function switchProject(id) {
-  if (id === currentProjectId) return;
+  if (id === currentProjectId) {
+    // Keep the dropdown in sync even when already on this project.
+    if (projectSelect && projectSelect.value !== id) projectSelect.value = id;
+    return;
+  }
   if (!modal.hidden) closeModal();
   if (!membersModal.hidden) closeMembers();
   currentProjectId = id;
   localStorage.setItem('tb_project', id);
-  if (projectSelect && projectSelect.value !== id) projectSelect.value = id;
+  renderProjectSelect();
   await loadBoard();
 }
 
@@ -707,18 +782,75 @@ async function deleteProject() {
 
 // Debounce writes so bursts of edits (e.g. typing) don't hammer the file.
 let saveTimer = null;
-function save() {
+/** True while a local save is queued or in flight (skip remote board sync). */
+let localSavePending = false;
+/** Server stamp for the open project's board (live sync). */
+let boardUpdatedAt = null;
+let boardSyncInFlight = false;
+/** Card ids with unsaved local edits — remote sync must not overwrite these. */
+const dirtyCardIds = new Set();
+/** Remote updates waiting because the card is locked locally. */
+const pendingRemoteCards = new Map();
+
+function markCardDirty(cardId) {
+  if (cardId) dirtyCardIds.add(cardId);
+}
+
+function isCardSyncLocked(cardId) {
+  if (!cardId) return false;
+  if (dirtyCardIds.has(cardId)) return true;
+  if (modal && !modal.hidden && editing && editing.cardId === cardId) return true;
+  return false;
+}
+
+function save(cardId) {
+  if (cardId) markCardDirty(cardId);
+  localSavePending = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(doSave, 200);
 }
 
 async function doSave() {
   if (!currentProjectId) return;
+  saveTimer = null;
+  // Dirty cards claim a fresh stamp so server merge keeps our edits over remote.
+  const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  if (editing && editing.cardId) dirtyCardIds.add(editing.cardId);
+  dirtyCardIds.forEach((id) => {
+    const card = findCardAnywhere(id);
+    if (card) card.updated_at = stamp;
+  });
   try {
     const json = await postJSON(`${API}?op=board_save&project=${encodeURIComponent(currentProjectId)}`, board);
-    if (!json.ok) toast('Save failed: ' + (json.error || 'unknown error'));
+    if (!json.ok) {
+      toast('Save failed: ' + (json.error || 'unknown error'));
+      return;
+    }
+    if (json.updated_at) boardUpdatedAt = json.updated_at;
+    dirtyCardIds.clear();
+    // Server kept newer remote versions for some cards — apply those locally.
+    if (Array.isArray(json.protected_cards) && json.protected_cards.length) {
+      let applied = 0;
+      json.protected_cards.forEach((remote) => {
+        if (!remote || !remote.id) return;
+        if (isCardSyncLocked(remote.id)) {
+          pendingRemoteCards.set(remote.id, remote);
+          return;
+        }
+        upsertSyncedCard(remote);
+        applied += 1;
+      });
+      if (applied) render();
+      if (json.protected_cards.length) {
+        toast('Kept newer remote edits on ' + json.protected_cards.length + ' card(s)');
+      }
+    }
+    // Flush any pending remotes that are no longer locked.
+    flushPendingRemoteCards();
   } catch (err) {
     toast('Save failed — is the server running?');
+  } finally {
+    localSavePending = false;
   }
 }
 
@@ -750,11 +882,13 @@ function normalize(data) {
     out.lists = data.lists.map((l) => ({
       id: l.id || uid('list'),
       title: String(l.title ?? 'List'),
+      color: (typeof l.color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(l.color)) ? l.color : null,
       cards: Array.isArray(l.cards) ? l.cards.map((c) => ({
         id: c.id || uid('card'),
         title: String(c.title ?? ''),
         description: sanitizeDescString(c.description ?? ''),
         due: c.due ? String(c.due) : null,
+        updated_at: c.updated_at ? String(c.updated_at) : null,
         labels: Array.isArray(c.labels) ? c.labels.filter((x) => LABELS[x]) : [],
         members: Array.isArray(c.members) ? c.members.filter((x) => memberIds.has(x)) : [],
         images: Array.isArray(c.images) ? c.images
@@ -860,10 +994,15 @@ function renderList(list) {
       class: 'list-title',
       contenteditable: 'true',
       spellcheck: 'false',
+      onpaste: pastePlainText,
+      onkeydown: (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.target.blur();
+        }
+      },
       onblur: (e) => {
-        const v = e.target.textContent.trim();
-        list.title = v || 'List';
-        if (!v) e.target.textContent = list.title;
+        list.title = flattenEditableText(e.target, 'List');
         save();
       },
     }, list.title),
@@ -875,7 +1014,13 @@ function renderList(list) {
     }, '×')
   );
 
-  return el('section', { class: 'list', dataset: { listId: list.id } },
+  const props = {
+    class: 'list' + (list.color ? ' has-color' : ''),
+    dataset: { listId: list.id },
+  };
+  if (list.color) props.style = `--list-accent:${list.color}`;
+
+  return el('section', props,
     header,
     el('div', { class: 'card-list' }, ...list.cards.map((c) => renderCard(c))),
     el('button', { class: 'add-card-btn', onclick: () => addCard(list.id) }, '+ Add a card')
@@ -982,7 +1127,10 @@ function syncFromDom() {
     const cards = [];
     listEl.querySelectorAll('.card-list > .card').forEach((cardEl) => {
       const card = findCardAnywhere(cardEl.dataset.cardId);
-      if (card) cards.push(card);
+      if (card) {
+        markCardDirty(card.id);
+        cards.push(card);
+      }
     });
     newLists.push({ ...list, cards });
   });
@@ -1015,7 +1163,7 @@ document.addEventListener('pointerdown', (e) => {
 // CRUD
 // ---------------------------------------------------------------------------
 function addList() {
-  const list = { id: uid('list'), title: 'New list', cards: [] };
+  const list = { id: uid('list'), title: 'New list', color: null, cards: [] };
   board.lists.push(list);
   render();
   save();
@@ -1042,10 +1190,21 @@ function deleteList(id) {
 function addCard(listId) {
   const list = findList(listId);
   if (!list) return;
-  const card = { id: uid('card'), title: 'New card', description: '', due: null, labels: [] };
+  const card = {
+    id: uid('card'),
+    title: 'New card',
+    description: '',
+    due: null,
+    updated_at: null,
+    labels: [],
+    members: [],
+    images: [],
+    checklist: [],
+    comments: [],
+  };
   list.cards.push(card);
   render();
-  save();
+  save(card.id);
   openModal(card.id);
 }
 
@@ -1094,6 +1253,7 @@ function closeModal() {
   editing = null;
   descEditor.hidden = true;
   descView.hidden = false;
+  flushPendingRemoteCards();
 }
 
 function saveCardFromModal() {
@@ -1102,7 +1262,8 @@ function saveCardFromModal() {
   if (!descEditor.hidden) saveDescEdit();
   const card = findCardAnywhere(editing.cardId);
   if (!card) return closeModal();
-  card.title = titleInput.textContent.trim() || '(untitled)';
+  const cardId = editing.cardId;
+  card.title = flattenEditableText(titleInput, '(untitled)');
   card.description = editing.description || '';
   card.due = dueInput.value || null;
   card.labels = [...editing.labels];
@@ -1112,7 +1273,7 @@ function saveCardFromModal() {
   card.comments = editing.comments;
   closeModal();
   render();
-  save();
+  save(cardId);
 }
 
 function deleteCardFromModal() {
@@ -1333,6 +1494,7 @@ async function addComment() {
     }
     // Ensure returned markup is allowlisted before showing.
     if (json.comment) json.comment.comment = sanitizeDescString(json.comment.comment || '');
+    if (json.updated_at) boardUpdatedAt = json.updated_at;
     editing.comments = editing.comments || [];
     editing.comments.push(json.comment);
     const card = findCardAnywhere(editing.cardId);
@@ -1356,6 +1518,7 @@ async function deleteComment(commentId) {
       toast(json.error || 'Could not delete comment.');
       return;
     }
+    if (json.updated_at) boardUpdatedAt = json.updated_at;
     editing.comments = (editing.comments || []).filter((c) => c.id !== commentId);
     const card = findCardAnywhere(editing.cardId);
     if (card) {
@@ -1536,8 +1699,7 @@ function removeMember(id) {
 // Board title editing
 // ---------------------------------------------------------------------------
 titleEl.addEventListener('blur', () => {
-  board.title = titleEl.textContent.trim() || 'Untitled';
-  titleEl.textContent = board.title;
+  board.title = flattenEditableText(titleEl, 'Untitled');
   // keep the selector label in sync (saving renames the project server-side)
   const p = projects.find((x) => x.id === currentProjectId);
   if (p) { p.name = board.title; renderProjectSelect(); }
@@ -1546,6 +1708,7 @@ titleEl.addEventListener('blur', () => {
 titleEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
 });
+titleEl.addEventListener('paste', pastePlainText);
 
 // ---------------------------------------------------------------------------
 // Export / Import JSON
@@ -1704,7 +1867,6 @@ descStyle.addEventListener('change', () => {
 modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
 // Header buttons
-document.getElementById('btn-add-list').onclick = addList;
 document.getElementById('btn-export').onclick = exportJson;
 document.getElementById('btn-import').onclick = () => document.getElementById('import-file').click();
 document.getElementById('import-file').onchange = importJson;
@@ -1751,8 +1913,70 @@ function openProfileModal() {
 
   showProfileMsg('', false);
   renderProfileAvatarPreview();
+  refreshAiCacheStatus();
   profileModal.hidden = false;
   setTimeout(() => document.getElementById('profile-name').focus(), 0);
+}
+
+async function refreshAiCacheStatus() {
+  const status = document.getElementById('profile-ai-cache-status');
+  const btn = document.getElementById('btn-clear-ai-cache');
+  if (!status || !btn) return;
+  status.classList.remove('is-error');
+  status.textContent = 'Checking cache size…';
+  btn.disabled = true;
+  const api = window.AiChatCache;
+  if (!api || typeof api.estimate !== 'function') {
+    status.textContent = 'AI cache tools unavailable.';
+    return;
+  }
+  try {
+    const info = await api.estimate();
+    const size = api.formatBytes(info.bytes);
+    if (info.bytes <= 0 && !info.inMemory) {
+      status.textContent = `No WebLLM model cached yet (${api.model}).`;
+      btn.disabled = true;
+      return;
+    }
+    const mem = info.inMemory ? ' · loaded in memory' : '';
+    status.textContent = `Using about ${size} for WebLLM (${api.model})${mem}.`;
+    btn.disabled = false;
+  } catch (err) {
+    console.warn(err);
+    status.classList.add('is-error');
+    status.textContent = 'Could not measure AI cache size.';
+    btn.disabled = false;
+  }
+}
+
+async function clearAiCache() {
+  const api = window.AiChatCache;
+  const status = document.getElementById('profile-ai-cache-status');
+  const btn = document.getElementById('btn-clear-ai-cache');
+  if (!api || typeof api.clear !== 'function') return;
+  const ok = window.confirm(
+    'Clear the downloaded WebLLM AI model from this browser?\n\n' +
+    'The next AI Chat generate may need to download it again.'
+  );
+  if (!ok) return;
+  if (status) {
+    status.classList.remove('is-error');
+    status.textContent = 'Clearing AI cache…';
+  }
+  if (btn) btn.disabled = true;
+  try {
+    await api.clear();
+    toast('AI model cache cleared');
+    await refreshAiCacheStatus();
+  } catch (err) {
+    console.error(err);
+    if (status) {
+      status.classList.add('is-error');
+      status.textContent = err?.message || 'Could not clear AI cache.';
+    }
+    if (btn) btn.disabled = false;
+    toast(err?.message || 'Could not clear AI cache.');
+  }
 }
 
 function closeProfileModal() {
@@ -1859,6 +2083,7 @@ document.getElementById('user-chip').onclick = openProfileModal;
 document.getElementById('profile-close').onclick = closeProfileModal;
 document.getElementById('profile-cancel').onclick = closeProfileModal;
 document.getElementById('profile-form').onsubmit = saveProfile;
+document.getElementById('btn-clear-ai-cache')?.addEventListener('click', clearAiCache);
 
 document.getElementById('btn-upload-photo').onclick = () => profilePhotoInput.click();
 document.getElementById('btn-remove-photo').onclick = () => {
@@ -1962,6 +2187,10 @@ if (titleInput) {
       titleInput.blur();
     }
   });
+  titleInput.addEventListener('paste', pastePlainText);
+  titleInput.addEventListener('blur', () => {
+    flattenEditableText(titleInput, '(untitled)');
+  });
 }
 
 // Update global keydown handler to close profileModal on Escape
@@ -2045,6 +2274,8 @@ let notifPollTimer = null;
 let notifUnread = 0;
 /** Poll interval from server (.env NOTIFICATION_POLL_SECONDS), default 2s. */
 let notifPollMs = 2000;
+/** Debug mode from server (.env DEBUG). Off in production. */
+let debugEnabled = false;
 let notifFetchInFlight = false;
 
 function actorAvatarColor(name) {
@@ -2140,7 +2371,11 @@ async function loadNotifications({ silent } = {}) {
   if (notifFetchInFlight) return;
   notifFetchInFlight = true;
   try {
-    const json = await getJSON(`${API}?op=notifications&limit=50`);
+    let url = `${API}?op=notifications&limit=50`;
+    if (currentProjectId) {
+      url += `&project=${encodeURIComponent(currentProjectId)}`;
+    }
+    const json = await getJSON(url);
     if (!json.ok) {
       if (!silent) toast(json.error || 'Could not load notifications.');
       return;
@@ -2149,10 +2384,180 @@ async function loadNotifications({ silent } = {}) {
     updateNotifBadge(json.unread ?? notificationsCache.filter((n) => !n.is_read).length);
     const overlay = document.getElementById('notif-drawer-overlay');
     if (overlay && !overlay.hidden) renderNotificationsList();
+
+    if (json.board_updated_at && json.project_id === currentProjectId) {
+      await maybeSyncBoard(json.board_updated_at);
+    }
   } catch (err) {
     if (!silent) toast('Could not load notifications.');
   } finally {
     notifFetchInFlight = false;
+  }
+}
+
+/** Pull only changed cards/lists when another member saves (same poll as notifications). */
+async function maybeSyncBoard(remoteUpdatedAt) {
+  if (!currentProjectId || !remoteUpdatedAt) return;
+  if (boardUpdatedAt && String(remoteUpdatedAt) === String(boardUpdatedAt)) return;
+  if (localSavePending || saveTimer || boardSyncInFlight) return;
+
+  boardSyncInFlight = true;
+  try {
+    const since = boardUpdatedAt || '';
+    const json = await getJSON(
+      `${API}?op=board_sync&project=${encodeURIComponent(currentProjectId)}&since=${encodeURIComponent(since)}`
+    );
+    if (!json.ok || !json.data) return;
+    applyBoardSync(json.data);
+  } catch (err) {
+    console.warn('Board sync failed:', err);
+  } finally {
+    boardSyncInFlight = false;
+  }
+}
+
+function normalizeSyncedCard(raw) {
+  const memberIds = new Set((board.members || []).map((m) => m.id));
+  return {
+    id: raw.id || uid('card'),
+    title: String(raw.title ?? ''),
+    description: sanitizeDescString(raw.description ?? ''),
+    due: raw.due ? String(raw.due) : null,
+    updated_at: raw.updated_at ? String(raw.updated_at) : null,
+    labels: Array.isArray(raw.labels) ? raw.labels.filter((x) => LABELS[x]) : [],
+    members: Array.isArray(raw.members) ? raw.members.filter((x) => memberIds.has(x)) : [],
+    images: Array.isArray(raw.images) ? raw.images
+      .filter((i) => i && typeof i.url === 'string')
+      .map((i) => ({ id: i.id || uid('img'), name: String(i.name || ''), url: i.url }))
+      : [],
+    checklist: Array.isArray(raw.checklist) ? raw.checklist.map((item) => ({
+      id: item.id || uid('chk'),
+      text: String(item.text ?? ''),
+      checked: !!item.checked,
+    })) : [],
+    comments: Array.isArray(raw.comments) ? raw.comments.map((cmt) => ({
+      id: cmt.id || uid('cmt'),
+      user_id: String(cmt.user_id || ''),
+      author_name: String(cmt.author_name || 'User'),
+      photo_url: cmt.photo_url || null,
+      comment: sanitizeDescString(cmt.comment || ''),
+      created_at: cmt.created_at || new Date().toISOString(),
+    })) : [],
+    list_id: raw.list_id || null,
+    position: Number.isFinite(Number(raw.position)) ? Number(raw.position) : null,
+  };
+}
+
+function removeCardFromBoard(cardId) {
+  (board.lists || []).forEach((l) => {
+    l.cards = (l.cards || []).filter((c) => c.id !== cardId);
+  });
+}
+
+function upsertSyncedCard(remote) {
+  const card = normalizeSyncedCard(remote);
+  const listId = card.list_id;
+  const list = listId ? findList(listId) : null;
+  if (!list) return false;
+
+  removeCardFromBoard(card.id);
+  const pos = card.position;
+  delete card.list_id;
+  delete card.position;
+  if (pos == null || pos < 0 || pos >= list.cards.length) list.cards.push(card);
+  else list.cards.splice(pos, 0, card);
+  pendingRemoteCards.delete(card.id);
+  return true;
+}
+
+function flushPendingRemoteCards() {
+  let changed = false;
+  for (const [id, remote] of [...pendingRemoteCards.entries()]) {
+    if (isCardSyncLocked(id)) continue;
+    if (upsertSyncedCard(remote)) changed = true;
+  }
+  if (changed) render();
+}
+
+function applyBoardSync(data) {
+  if (!data) return;
+  let changed = false;
+
+  if (typeof data.title === 'string' && data.title && data.title !== board.title) {
+    board.title = data.title;
+    changed = true;
+  }
+
+  if (Array.isArray(data.members)) {
+    board.members = data.members.map((m, i) => ({
+      id: m.id || uid('mem'),
+      name: String(m.name || ''),
+      color: m.color || MEMBER_COLORS[i % MEMBER_COLORS.length],
+      role: m.role || 'member',
+      email: m.email || '',
+      user_id: m.user_id || null,
+      photo_url: m.photo_url || null,
+      is_you: !!m.is_you,
+    }));
+    board.currentMemberId = data.current_member_id || board.currentMemberId || null;
+    board.currentRole = data.current_role || board.currentRole || null;
+    changed = true;
+  }
+
+  // Sync list shell (id/title/color/order) without wiping locked cards carelessly.
+  if (Array.isArray(data.lists) && data.lists.length) {
+    const byId = new Map((board.lists || []).map((l) => [l.id, l]));
+    const nextLists = [];
+    data.lists.forEach((meta) => {
+      const existing = byId.get(meta.id);
+      if (existing) {
+        existing.title = String(meta.title ?? existing.title);
+        existing.color = (typeof meta.color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(meta.color))
+          ? meta.color
+          : existing.color;
+        nextLists.push(existing);
+        byId.delete(meta.id);
+      } else {
+        nextLists.push({
+          id: meta.id || uid('list'),
+          title: String(meta.title ?? 'List'),
+          color: (typeof meta.color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(meta.color)) ? meta.color : null,
+          cards: [],
+        });
+      }
+    });
+    // Keep unknown local-only lists (rare) at the end with their cards.
+    byId.forEach((l) => nextLists.push(l));
+    board.lists = nextLists;
+    changed = true;
+  }
+
+  const remoteIds = new Set(Array.isArray(data.card_ids) ? data.card_ids : []);
+  (data.cards || []).forEach((remote) => {
+    if (!remote || !remote.id) return;
+    if (isCardSyncLocked(remote.id)) {
+      pendingRemoteCards.set(remote.id, remote);
+      return;
+    }
+    if (upsertSyncedCard(remote)) changed = true;
+  });
+
+  // Removals: drop cards deleted remotely unless locked locally.
+  if (remoteIds.size) {
+    (board.lists || []).forEach((l) => {
+      const keep = [];
+      (l.cards || []).forEach((c) => {
+        if (remoteIds.has(c.id) || isCardSyncLocked(c.id)) keep.push(c);
+        else changed = true;
+      });
+      l.cards = keep;
+    });
+  }
+
+  if (data.updated_at) boardUpdatedAt = data.updated_at;
+  if (changed) {
+    render();
+    renderProjectSelect();
   }
 }
 
@@ -2212,6 +2617,10 @@ function applyNotificationPollConfig(seconds) {
   notifPollMs = sec * 1000;
 }
 
+function applyDebugConfig(enabled) {
+  debugEnabled = !!enabled;
+}
+
 function startNotificationPolling() {
   stopNotificationPolling();
   loadNotifications({ silent: true });
@@ -2267,6 +2676,7 @@ async function init() {
     me = await getJSON(`${API}?op=me`);
     applyRegistrationUi(!!me.registration_open);
     applyNotificationPollConfig(me.notification_poll_seconds);
+    applyDebugConfig(me.debug);
   } catch (err) {
     toast('Could not reach api.php — serve via PHP (php -S localhost:8000).');
     showAuthPane('auth-main');
@@ -2346,5 +2756,20 @@ function initFlatpickr() {
     };
   }
 }
+
+/** Bridge for assets/ai-chat.js (Chrome AI / WebLLM → todo cards). */
+window.TaskBoard = {
+  get board() { return board; },
+  get currentProjectId() { return currentProjectId; },
+  get debug() { return debugEnabled; },
+  API,
+  postJSON,
+  uid,
+  render,
+  save,
+  loadBoard,
+  toast,
+  findList,
+};
 
 init();

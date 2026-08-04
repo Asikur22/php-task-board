@@ -23,6 +23,7 @@ jobs:
           exclude: |
             /database/*
             /uploads/*
-            .env.example
+            /logs/*
+            /migrations/*
             **/.git*
             **/.git*/**
