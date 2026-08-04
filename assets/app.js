@@ -33,6 +33,12 @@ let projects = [];
 /** Currently selected project id. */
 let currentProjectId = null;
 
+/** True when viewing a public share link (?share=TOKEN). Read-only. */
+let shareMode = false;
+/** Active share token when shareMode is on. */
+let shareToken = '';
+let sharePollTimer = null;
+
 /** In-memory board state for the current project. */
 let board = { title: 'Task Board', members: [], lists: [] };
 
@@ -279,7 +285,7 @@ function showDescView() {
 }
 
 function enterDescEdit() {
-  if (!editing || !descEditor.hidden) return;
+  if (shareMode || !editing || !descEditor.hidden) return;
   fillSanitizedDesc(descEditable, editing.description);
   if (!descEditable.textContent.trim() && !descEditable.querySelector('br,ul,ol')) {
     descEditable.replaceChildren();
@@ -559,18 +565,9 @@ function wireAuth() {
     else { showAuthError(json.error || 'Could not reset password.'); }
   });
 
-  document.getElementById('btn-logout').addEventListener('click', async () => {
-    closeProfileModal();
-    closeNotifDrawer();
-    stopNotificationPolling();
-    await postJSON(`${API}?op=logout`, {});
-    currentUser = null;
-    csrfToken = '';
-    notificationsCache = [];
-    updateNotifBadge(0);
-    const bell = document.getElementById('btn-notifications');
-    if (bell) bell.hidden = true;
-    showAuthPane('auth-main');
+  document.getElementById('btn-logout').addEventListener('click', (e) => {
+    e.preventDefault();
+    confirmLogout();
   });
 }
 
@@ -592,7 +589,7 @@ async function afterAuth(json) {
   startNotificationPolling();
   await loadProjects();
   const saved = localStorage.getItem('tb_project');
-  currentProjectId = (saved && projects.some((p) => p.id === saved)) ? saved : (projects[0]?.id || null);
+  currentProjectId = preferredProjectId(saved);
   if (!currentProjectId) { toast('Welcome! Create your first project with ＋.'); renderProjectSelect(); return; }
   renderProjectSelect();
   await loadBoard();
@@ -708,7 +705,14 @@ function imgSrc(img) {
 async function loadProjects() {
   try {
     const json = await getJSON(`${API}?op=projects`);
-    if (json.ok) projects = json.projects || [];
+    if (json.ok) {
+      projects = (json.projects || []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        archived: !!p.archived,
+        role: p.role || 'member',
+      }));
+    }
   } catch (err) {
     toast('Could not reach api.php — serve via PHP (php -S localhost:8000).');
   }
@@ -716,8 +720,31 @@ async function loadProjects() {
 
 function renderProjectSelect() {
   projectSelect.replaceChildren();
-  projects.forEach((p) => projectSelect.appendChild(el('option', { value: p.id }, p.name)));
-  if (currentProjectId) projectSelect.value = currentProjectId;
+  projects.filter((p) => !p.archived).forEach((p) => {
+    projectSelect.appendChild(el('option', { value: p.id }, p.name));
+  });
+
+  if (currentProjectId && projects.some((p) => p.id === currentProjectId && !p.archived)) {
+    projectSelect.value = currentProjectId;
+  }
+  updateArchiveButton();
+}
+
+function preferredProjectId(savedId) {
+  if (savedId && projects.some((p) => p.id === savedId && !p.archived)) return savedId;
+  return projects.find((p) => !p.archived)?.id || null;
+}
+
+function currentProjectMeta() {
+  return projects.find((p) => p.id === currentProjectId) || null;
+}
+
+function updateArchiveButton() {
+  const btn = document.getElementById('btn-archive-project');
+  if (!btn) return;
+  btn.title = 'Archive project';
+  btn.textContent = '📦';
+  btn.hidden = !currentProjectId || !!currentProjectMeta()?.archived;
 }
 
 async function loadBoard() {
@@ -729,6 +756,18 @@ async function loadBoard() {
       board.currentMemberId = json.data.current_member_id || null;
       board.currentRole = json.data.current_role || null;
       boardUpdatedAt = json.data.updated_at || null;
+      const cur = currentProjectMeta();
+      if (cur) cur.archived = !!json.data.archived;
+      // Archived projects stay out of the picker — bounce to an active one.
+      if (json.data.archived) {
+        const next = preferredProjectId(null);
+        if (next && next !== currentProjectId) {
+          await switchProject(next);
+          return;
+        }
+      }
+      updateArchiveButton();
+      updateShareButton();
     }
   } catch (err) {
     toast('Could not load this project.');
@@ -744,10 +783,14 @@ async function switchProject(id) {
   }
   if (!modal.hidden) closeModal();
   if (!membersModal.hidden) closeMembers();
+  closePresenceMenu();
+  closeSharePopover();
+  onlineUsersCache = [];
   currentProjectId = id;
   localStorage.setItem('tb_project', id);
   renderProjectSelect();
   await loadBoard();
+  loadNotifications({ silent: true });
 }
 
 async function createProject(name) {
@@ -761,23 +804,112 @@ async function createProject(name) {
   }
 }
 
-async function deleteProject() {
+async function archiveProject() {
   if (!currentProjectId) return;
-  if (projects.length <= 1) { toast('You need at least one project.'); return; }
-  const cur = projects.find((p) => p.id === currentProjectId);
-  if (!confirm(`Delete project "${cur?.name || ''}" and all its lists, cards, and images?`)) return;
+  const cur = currentProjectMeta();
+  if (!cur || cur.archived) return;
+
+  const activeCount = projects.filter((p) => !p.archived).length;
+  if (activeCount <= 1) { toast('You need at least one active project.'); return; }
+  if (!confirm(`Archive project "${cur.name}"? You can restore it later from My Profile.`)) return;
   try {
-    const res = await postJSON(`${API}?op=project_delete`, { id: currentProjectId });
-    const json = res;
-    if (!json.ok) { toast(json.error || 'Could not delete project.'); return; }
+    const json = await postJSON(`${API}?op=project_archive`, { id: currentProjectId });
+    if (!json.ok) { toast(json.error || 'Could not archive project.'); return; }
     await loadProjects();
-    currentProjectId = projects[0]?.id || null;
+    const next = preferredProjectId(null);
+    currentProjectId = next || null;
     if (currentProjectId) localStorage.setItem('tb_project', currentProjectId);
+    else localStorage.removeItem('tb_project');
     renderProjectSelect();
-    await loadBoard();
+    if (currentProjectId) await loadBoard();
+    else {
+      board = { title: '', members: [], lists: [] };
+      render();
+    }
+    toast('Project archived.');
   } catch (err) {
-    toast('Could not delete project.');
+    toast('Could not archive project.');
   }
+}
+
+async function restoreArchivedProject(projectId) {
+  const cur = projects.find((p) => p.id === projectId);
+  if (!cur || !cur.archived) return;
+  if (!confirm(`Restore project "${cur.name}"?`)) return;
+  try {
+    const json = await postJSON(`${API}?op=project_unarchive`, { id: projectId });
+    if (!json.ok) { toast(json.error || 'Could not restore project.'); return; }
+    await loadProjects();
+    renderProjectSelect();
+    renderArchivedProjectsList();
+    toast('Project restored.');
+  } catch (err) {
+    toast('Could not restore project.');
+  }
+}
+
+function renderArchivedProjectsList() {
+  const list = document.getElementById('profile-archived-list');
+  const empty = document.getElementById('profile-archived-empty');
+  if (!list) return;
+
+  const archived = projects.filter((p) => p.archived && p.role === 'owner');
+  list.replaceChildren();
+  if (!archived.length) {
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  archived.forEach((p) => {
+    list.appendChild(el('div', { class: 'profile-archived-item' },
+      el('span', { class: 'profile-archived-name', title: p.name }, p.name),
+      el('button', {
+        type: 'button',
+        class: 'btn btn-soft btn-mini',
+        onclick: () => restoreArchivedProject(p.id),
+      }, 'Restore')
+    ));
+  });
+}
+
+function showProfileTab(tabId) {
+  const id = tabId || 'profile';
+  document.querySelectorAll('.profile-nav-btn[data-profile-tab]').forEach((btn) => {
+    const on = btn.dataset.profileTab === id;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('.profile-panel').forEach((panel) => {
+    const on = panel.dataset.profilePanel === id;
+    panel.hidden = !on;
+    panel.classList.toggle('active', on);
+  });
+  if (id === 'projects') renderArchivedProjectsList();
+  if (id === 'ai') refreshAiCacheStatus();
+}
+
+function wireProfileTabs() {
+  document.querySelectorAll('.profile-nav-btn[data-profile-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => showProfileTab(btn.dataset.profileTab));
+  });
+}
+
+async function confirmLogout() {
+  if (!confirm('Log out of Task Board?')) return;
+  closeProfileModal();
+  closeNotifDrawer();
+  hidePresence();
+  stopNotificationPolling();
+  try {
+    await postJSON(`${API}?op=logout`, {});
+  } catch (err) { /* still clear local session */ }
+  currentUser = null;
+  csrfToken = '';
+  notificationsCache = [];
+  updateNotifBadge(0);
+  const bell = document.getElementById('btn-notifications');
+  if (bell) bell.hidden = true;
+  showAuthPane('auth-main');
 }
 
 // Debounce writes so bursts of edits (e.g. typing) don't hammer the file.
@@ -804,6 +936,7 @@ function isCardSyncLocked(cardId) {
 }
 
 function save(cardId) {
+  if (shareMode) return;
   if (cardId) markCardDirty(cardId);
   localSavePending = true;
   clearTimeout(saveTimer);
@@ -811,7 +944,7 @@ function save(cardId) {
 }
 
 async function doSave() {
-  if (!currentProjectId) return;
+  if (shareMode || !currentProjectId) return;
   saveTimer = null;
   // Dirty cards claim a fresh stamp so server merge keeps our edits over remote.
   const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -979,40 +1112,52 @@ function render() {
 
   board.lists.forEach((list) => boardEl.appendChild(renderList(list)));
 
-  // Non-dragable "add list" tile at the end.
-  boardEl.appendChild(
-    el('button', { class: 'add-list-tile', onclick: addList }, '+ Add a list')
-  );
-
-  initSortable();
+  if (!shareMode) {
+    boardEl.appendChild(
+      el('button', { class: 'add-list-tile', onclick: addList }, '+ Add a list')
+    );
+    initSortable();
+  } else {
+    sortables.forEach((s) => s.destroy());
+    sortables = [];
+  }
 }
 
 function renderList(list) {
-  const header = el('div', { class: 'list-header' },
-    el('span', { class: 'list-handle', title: 'Drag to reorder list', 'aria-hidden': 'true' }, '⋮⋮'),
-    el('span', {
-      class: 'list-title',
-      contenteditable: 'true',
-      spellcheck: 'false',
-      onpaste: pastePlainText,
-      onkeydown: (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          e.target.blur();
-        }
-      },
-      onblur: (e) => {
-        list.title = flattenEditableText(e.target, 'List');
-        save();
-      },
-    }, list.title),
-    el('button', {
+  const titleProps = {
+    class: 'list-title',
+    spellcheck: 'false',
+  };
+  if (!shareMode) {
+    titleProps.contenteditable = 'true';
+    titleProps.onpaste = pastePlainText;
+    titleProps.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.target.blur();
+      }
+    };
+    titleProps.onblur = (e) => {
+      list.title = flattenEditableText(e.target, 'List');
+      save();
+    };
+  }
+
+  const headerChildren = [];
+  if (!shareMode) {
+    headerChildren.push(el('span', { class: 'list-handle', title: 'Drag to reorder list', 'aria-hidden': 'true' }, '⋮⋮'));
+  }
+  headerChildren.push(el('span', titleProps, list.title));
+  if (!shareMode) {
+    headerChildren.push(el('button', {
       class: 'list-delete',
       title: 'Delete list',
       'aria-label': 'Delete list',
       onclick: () => deleteList(list.id),
-    }, '×')
-  );
+    }, '×'));
+  }
+
+  const header = el('div', { class: 'list-header' }, ...headerChildren);
 
   const props = {
     class: 'list' + (list.color ? ' has-color' : ''),
@@ -1020,11 +1165,15 @@ function renderList(list) {
   };
   if (list.color) props.style = `--list-accent:${list.color}`;
 
-  return el('section', props,
+  const kids = [
     header,
     el('div', { class: 'card-list' }, ...list.cards.map((c) => renderCard(c))),
-    el('button', { class: 'add-card-btn', onclick: () => addCard(list.id) }, '+ Add a card')
-  );
+  ];
+  if (!shareMode) {
+    kids.push(el('button', { class: 'add-card-btn', onclick: () => addCard(list.id) }, '+ Add a card'));
+  }
+
+  return el('section', props, ...kids);
 }
 
 function renderCard(card) {
@@ -1094,6 +1243,7 @@ let sortables = [];
 function initSortable() {
   sortables.forEach((s) => s.destroy());
   sortables = [];
+  if (shareMode) return;
 
   // Cards inside each list share group "cards" -> move between lists.
   document.querySelectorAll('.card-list').forEach((container) => {
@@ -1230,16 +1380,18 @@ function openModal(cardId) {
   };
 
   titleInput.textContent = card.title || '';
+  titleInput.contentEditable = shareMode ? 'false' : 'true';
   showDescView();
   resetCommentComposer();
   const clearBtn = document.getElementById('btn-clear-due');
   if (fpDue) {
     fpDue.setDate(card.due || '', false);
-    if (clearBtn) clearBtn.hidden = !card.due;
+    if (clearBtn) clearBtn.hidden = !card.due || shareMode;
   } else {
     dueInput.value = card.due || '';
-    if (clearBtn) clearBtn.hidden = !card.due;
+    if (clearBtn) clearBtn.hidden = !card.due || shareMode;
   }
+  dueInput.disabled = !!shareMode;
   renderModalLabels();
   renderModalAssignees();
   renderModalChecklist();
@@ -1253,10 +1405,13 @@ function closeModal() {
   editing = null;
   descEditor.hidden = true;
   descView.hidden = false;
+  titleInput.contentEditable = 'true';
+  dueInput.disabled = false;
   flushPendingRemoteCards();
 }
 
 function saveCardFromModal() {
+  if (shareMode) { closeModal(); return; }
   if (!editing) return;
   // Commit any open description draft before saving the card.
   if (!descEditor.hidden) saveDescEdit();
@@ -1537,6 +1692,7 @@ async function deleteComment(commentId) {
 const membersModal = document.getElementById('members-modal');
 
 function openMembers() {
+  if (shareMode) return;
   board.members = board.members || [];
   renderMembersList();
   membersModal.hidden = false;
@@ -1545,6 +1701,218 @@ function openMembers() {
 
 function closeMembers() {
   membersModal.hidden = true;
+}
+
+function buildShareUrl(token) {
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash = '';
+  u.searchParams.set('share', token);
+  return u.toString();
+}
+
+function setShareLinkUi({ enabled, token }) {
+  const off = document.getElementById('share-link-off');
+  const on = document.getElementById('share-link-on');
+  const input = document.getElementById('share-url');
+  if (!off || !on || !input) return;
+  if (enabled && token) {
+    off.hidden = true;
+    on.hidden = false;
+    input.value = buildShareUrl(token);
+  } else {
+    off.hidden = false;
+    on.hidden = true;
+    input.value = '';
+  }
+}
+
+function updateShareButton() {
+  const root = document.getElementById('share-popover');
+  if (!root) return;
+  const canShare = !shareMode && !!currentProjectId && board.currentRole === 'owner';
+  root.hidden = !canShare;
+  if (!canShare) closeSharePopover();
+}
+
+function closeSharePopover() {
+  const menu = document.getElementById('share-popover-menu');
+  const toggle = document.getElementById('share-popover-toggle');
+  if (menu) menu.hidden = true;
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+}
+
+async function openSharePopover() {
+  if (shareMode || board.currentRole !== 'owner' || !currentProjectId) return;
+  const menu = document.getElementById('share-popover-menu');
+  const toggle = document.getElementById('share-popover-toggle');
+  if (!menu || !toggle) return;
+  closePresenceMenu();
+  await refreshShareLinkUi();
+  menu.hidden = false;
+  toggle.setAttribute('aria-expanded', 'true');
+}
+
+function toggleSharePopover() {
+  const menu = document.getElementById('share-popover-menu');
+  if (!menu) return;
+  if (menu.hidden) openSharePopover();
+  else closeSharePopover();
+}
+
+async function refreshShareLinkUi() {
+  if (!currentProjectId || board.currentRole !== 'owner') {
+    setShareLinkUi({ enabled: false });
+    return;
+  }
+  try {
+    const json = await getJSON(`${API}?op=project_share_status&project=${encodeURIComponent(currentProjectId)}`);
+    if (!json.ok) {
+      setShareLinkUi({ enabled: false });
+      return;
+    }
+    setShareLinkUi({ enabled: !!json.enabled, token: json.token || '' });
+  } catch (err) {
+    setShareLinkUi({ enabled: false });
+  }
+}
+
+async function enableShareLink({ rotate } = {}) {
+  if (!currentProjectId) return;
+  if (rotate && !confirm('Create a new share link? The old link will stop working.')) return;
+  try {
+    const json = await postJSON(`${API}?op=project_share_enable`, { project: currentProjectId });
+    if (!json.ok) { toast(json.error || 'Could not create share link.'); return; }
+    setShareLinkUi({ enabled: true, token: json.token });
+    toast(rotate ? 'New share link created.' : 'Share link ready — copy and send it.');
+  } catch (err) {
+    toast('Could not create share link.');
+  }
+}
+
+async function disableShareLink() {
+  if (!currentProjectId) return;
+  if (!confirm('Turn off sharing? Anyone with the old link will lose access.')) return;
+  try {
+    const json = await postJSON(`${API}?op=project_share_disable`, { project: currentProjectId });
+    if (!json.ok) { toast(json.error || 'Could not turn off sharing.'); return; }
+    setShareLinkUi({ enabled: false });
+    toast('Sharing turned off.');
+  } catch (err) {
+    toast('Could not turn off sharing.');
+  }
+}
+
+async function copyShareLink() {
+  const input = document.getElementById('share-url');
+  const url = input?.value || '';
+  if (!url) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      input.select();
+      document.execCommand('copy');
+    }
+    toast('Share link copied.');
+  } catch (err) {
+    input.select();
+    toast('Copy the link from the field.');
+  }
+}
+
+function wireShareLinkControls() {
+  const toggle = document.getElementById('share-popover-toggle');
+  const root = document.getElementById('share-popover');
+  if (toggle) {
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleSharePopover();
+    });
+  }
+  document.getElementById('share-enable')?.addEventListener('click', () => enableShareLink());
+  document.getElementById('share-rotate')?.addEventListener('click', () => enableShareLink({ rotate: true }));
+  document.getElementById('share-disable')?.addEventListener('click', () => disableShareLink());
+  document.getElementById('share-copy')?.addEventListener('click', () => copyShareLink());
+  document.addEventListener('click', (e) => {
+    if (!root || root.hidden) return;
+    if (root.contains(e.target)) return;
+    closeSharePopover();
+  });
+}
+
+async function loadSharedBoard({ silent } = {}) {
+  if (!shareToken) return false;
+  try {
+    let url = `${API}?op=board_public&token=${encodeURIComponent(shareToken)}`;
+    if (silent && boardUpdatedAt) {
+      url += `&since=${encodeURIComponent(boardUpdatedAt)}`;
+    }
+    const json = await getJSON(url);
+    if (!json.ok) {
+      if (!silent) toast(json.error || 'This share link is invalid.');
+      return false;
+    }
+    if (json.unchanged) {
+      if (json.updated_at) boardUpdatedAt = json.updated_at;
+      return true;
+    }
+    if (!json.data) {
+      if (!silent) toast(json.error || 'This share link is invalid.');
+      return false;
+    }
+    board = normalize(json.data);
+    board.currentMemberId = null;
+    board.currentRole = null;
+    boardUpdatedAt = json.data.updated_at || json.updated_at || null;
+    currentProjectId = null;
+    render();
+    return true;
+  } catch (err) {
+    if (!silent) toast('Could not load the shared board.');
+    return false;
+  }
+}
+
+function startSharePolling() {
+  stopSharePolling();
+  sharePollTimer = setInterval(() => {
+    if (document.hidden || !shareMode) return;
+    loadSharedBoard({ silent: true });
+  }, Math.max(notifPollMs, 5000));
+}
+
+function stopSharePolling() {
+  if (sharePollTimer) {
+    clearInterval(sharePollTimer);
+    sharePollTimer = null;
+  }
+}
+
+async function enterShareMode(token) {
+  shareMode = true;
+  shareToken = token;
+  document.body.classList.add('share-mode');
+  const badge = document.getElementById('share-mode-badge');
+  if (badge) badge.hidden = false;
+  titleEl.contentEditable = 'false';
+
+  document.getElementById('auth-view').hidden = true;
+  document.getElementById('app-view').hidden = false;
+
+  const ok = await loadSharedBoard();
+  if (!ok) {
+    document.getElementById('app-view').hidden = true;
+    showAuthPane('auth-main');
+    showAuthError('This share link is invalid or has been turned off.');
+    shareMode = false;
+    shareToken = '';
+    document.body.classList.remove('share-mode');
+    if (badge) badge.hidden = true;
+    titleEl.contentEditable = 'true';
+    return;
+  }
+  startSharePolling();
 }
 
 // ----- New project modal (replaces the browser's native prompt()) -----------
@@ -1642,7 +2010,7 @@ async function leaveProject() {
   if (!json.ok) { toast(json.error || 'Could not leave project.'); return; }
   closeMembers();
   await loadProjects();
-  currentProjectId = projects[0]?.id || null;
+  currentProjectId = preferredProjectId(null);
   if (currentProjectId) {
     localStorage.setItem('tb_project', currentProjectId);
     renderProjectSelect();
@@ -1699,6 +2067,7 @@ function removeMember(id) {
 // Board title editing
 // ---------------------------------------------------------------------------
 titleEl.addEventListener('blur', () => {
+  if (shareMode) return;
   board.title = flattenEditableText(titleEl, 'Untitled');
   // keep the selector label in sync (saving renames the project server-side)
   const p = projects.find((x) => x.id === currentProjectId);
@@ -1874,7 +2243,7 @@ document.getElementById('import-file').onchange = importJson;
 // Project switcher
 projectSelect.onchange = () => switchProject(projectSelect.value);
 document.getElementById('btn-new-project').onclick = openNewProject;
-document.getElementById('btn-del-project').onclick = deleteProject;
+document.getElementById('btn-archive-project').onclick = archiveProject;
 
 // Member roster manager
 document.getElementById('btn-members').onclick = openMembers;
@@ -1888,6 +2257,7 @@ document.getElementById('invite-email').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); inviteMember(); }
 });
 membersModal.addEventListener('click', (e) => { if (e.target === membersModal) closeMembers(); });
+wireShareLinkControls();
 
 // New project modal
 document.getElementById('new-project-close').onclick = closeNewProject;
@@ -1913,7 +2283,7 @@ function openProfileModal() {
 
   showProfileMsg('', false);
   renderProfileAvatarPreview();
-  refreshAiCacheStatus();
+  showProfileTab('profile');
   profileModal.hidden = false;
   setTimeout(() => document.getElementById('profile-name').focus(), 0);
 }
@@ -2083,6 +2453,7 @@ document.getElementById('user-chip').onclick = openProfileModal;
 document.getElementById('profile-close').onclick = closeProfileModal;
 document.getElementById('profile-cancel').onclick = closeProfileModal;
 document.getElementById('profile-form').onsubmit = saveProfile;
+wireProfileTabs();
 document.getElementById('btn-clear-ai-cache')?.addEventListener('click', clearAiCache);
 
 document.getElementById('btn-upload-photo').onclick = () => profilePhotoInput.click();
@@ -2277,6 +2648,9 @@ let notifPollMs = 2000;
 /** Debug mode from server (.env DEBUG). Off in production. */
 let debugEnabled = false;
 let notifFetchInFlight = false;
+/** Project members currently online (from notification poll heartbeat). */
+let onlineUsersCache = [];
+const PRESENCE_AVATAR_MAX = 4;
 
 function actorAvatarColor(name) {
   const colors = MEMBER_COLORS;
@@ -2384,6 +2758,10 @@ async function loadNotifications({ silent } = {}) {
     updateNotifBadge(json.unread ?? notificationsCache.filter((n) => !n.is_read).length);
     const overlay = document.getElementById('notif-drawer-overlay');
     if (overlay && !overlay.hidden) renderNotificationsList();
+
+    if (json.project_id === currentProjectId) {
+      renderPresence(Array.isArray(json.online) ? json.online : []);
+    }
 
     if (json.board_updated_at && json.project_id === currentProjectId) {
       await maybeSyncBoard(json.board_updated_at);
@@ -2621,6 +2999,100 @@ function applyDebugConfig(enabled) {
   debugEnabled = !!enabled;
 }
 
+function closePresenceMenu() {
+  const menu = document.getElementById('presence-menu');
+  const toggle = document.getElementById('presence-toggle');
+  if (menu) menu.hidden = true;
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+}
+
+function togglePresenceMenu() {
+  const menu = document.getElementById('presence-menu');
+  const toggle = document.getElementById('presence-toggle');
+  if (!menu || !toggle || document.getElementById('presence')?.hidden) return;
+  closeSharePopover();
+  const open = menu.hidden;
+  menu.hidden = !open;
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+/** Stacked avatars + dropdown list from the notification poll heartbeat. */
+function renderPresence(users) {
+  onlineUsersCache = Array.isArray(users) ? users : [];
+  const root = document.getElementById('presence');
+  const avatars = document.getElementById('presence-avatars');
+  const label = document.getElementById('presence-label');
+  const list = document.getElementById('presence-list');
+  const empty = document.getElementById('presence-empty');
+  if (!root || !avatars || !label || !list || !empty) return;
+
+  if (!currentUser || !currentProjectId) {
+    root.hidden = true;
+    closePresenceMenu();
+    return;
+  }
+
+  root.hidden = false;
+  const count = onlineUsersCache.length;
+  label.textContent = count === 1 ? '1 online' : `${count} online`;
+
+  avatars.replaceChildren();
+  onlineUsersCache.slice(0, PRESENCE_AVATAR_MAX).forEach((u) => {
+    avatars.appendChild(renderAvatar({
+      name: u.name,
+      photo_url: u.photo_url || null,
+      color: u.color || actorAvatarColor(u.name),
+    }));
+  });
+  if (count > PRESENCE_AVATAR_MAX) {
+    avatars.appendChild(el('span', { class: 'presence-more' }, `+${count - PRESENCE_AVATAR_MAX}`));
+  }
+
+  list.replaceChildren();
+  if (!count) {
+    empty.hidden = false;
+    empty.textContent = 'No one online';
+  } else {
+    empty.hidden = true;
+    onlineUsersCache.forEach((u) => {
+      list.appendChild(el('div', { class: 'presence-item', role: 'menuitem' },
+        renderAvatar({
+          name: u.name,
+          photo_url: u.photo_url || null,
+          color: u.color || actorAvatarColor(u.name),
+        }),
+        el('div', { class: 'presence-item-meta' },
+          el('span', { class: 'presence-item-name' }, u.is_you ? `${u.name} (you)` : u.name),
+          el('span', { class: 'presence-item-status' }, 'Online')
+        )
+      ));
+    });
+  }
+}
+
+function hidePresence() {
+  onlineUsersCache = [];
+  const root = document.getElementById('presence');
+  if (root) root.hidden = true;
+  closePresenceMenu();
+}
+
+function wirePresence() {
+  const toggle = document.getElementById('presence-toggle');
+  const root = document.getElementById('presence');
+  if (toggle) {
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePresenceMenu();
+    });
+  }
+  document.addEventListener('click', (e) => {
+    if (!root || root.hidden) return;
+    if (root.contains(e.target)) return;
+    closePresenceMenu();
+  });
+}
+
 function startNotificationPolling() {
   stopNotificationPolling();
   loadNotifications({ silent: true });
@@ -2658,6 +3130,8 @@ function wireNotifications() {
     if (e.key === 'Escape') {
       const ov = document.getElementById('notif-drawer-overlay');
       if (ov && !ov.hidden) closeNotifDrawer();
+      closePresenceMenu();
+      closeSharePopover();
     }
   });
 }
@@ -2666,11 +3140,21 @@ function wireNotifications() {
 async function init() {
   wireAuth();
   wireNotifications();
+  wirePresence();
   initPasswordToggles();
   initBgTheme();
 
-  const resetToken = new URLSearchParams(location.search).get('reset');
-  const verifyToken = new URLSearchParams(location.search).get('verify');
+  const params = new URLSearchParams(location.search);
+  const shareParam = params.get('share');
+  const resetToken = params.get('reset');
+  const verifyToken = params.get('verify');
+
+  // Public view-only share link — no login required.
+  if (shareParam) {
+    await enterShareMode(shareParam);
+    return;
+  }
+
   let me;
   try {
     me = await getJSON(`${API}?op=me`);
@@ -2699,10 +3183,22 @@ async function init() {
     return;
   }
 
-  // A reset link takes precedence: open the reset pane (it logs in on success).
+  // A reset link takes precedence: validate token before showing the reset pane.
   if (resetToken) {
-    pendingResetToken = resetToken;
-    showAuthReset();
+    showAuthPane('auth-main');
+    try {
+      const json = await postJSON(`${API}?op=check_reset`, { token: resetToken });
+      if (json.ok) {
+        pendingResetToken = resetToken;
+        showAuthReset();
+        return;
+      }
+      history.replaceState(null, '', location.pathname);
+      showAuthError(json.error || 'This reset link is invalid or has expired.');
+    } catch (err) {
+      history.replaceState(null, '', location.pathname);
+      showAuthError('This reset link is invalid or has expired.');
+    }
     return;
   }
 
@@ -2713,9 +3209,7 @@ async function init() {
     initFlatpickr();
     await loadProjects();
     const saved = localStorage.getItem('tb_project');
-    currentProjectId = (saved && projects.some((p) => p.id === saved))
-      ? saved
-      : (projects[0]?.id || null);
+    currentProjectId = preferredProjectId(saved);
     if (!currentProjectId) {
       renderProjectSelect();
       toast('Welcome! Create your first project with ＋.');
@@ -2762,6 +3256,7 @@ window.TaskBoard = {
   get board() { return board; },
   get currentProjectId() { return currentProjectId; },
   get debug() { return debugEnabled; },
+  get shareMode() { return shareMode; },
   API,
   postJSON,
   uid,

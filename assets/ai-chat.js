@@ -221,6 +221,7 @@ function aiShowPreview(todos) {
 }
 
 function openAiChatModal() {
+  if (window.TaskBoard?.shareMode) return;
   const modal = aiEl('ai-chat-modal');
   if (!modal) return;
   aiPopulateLists();
@@ -850,14 +851,6 @@ function wireAiChat() {
   aiEl('ai-chat-cancel')?.addEventListener('click', closeAiChatModal);
   aiEl('ai-chat-generate')?.addEventListener('click', onAiGenerate);
   aiEl('ai-chat-add')?.addEventListener('click', onAiAddCards);
-  aiEl('ai-chat-modal')?.addEventListener('click', (e) => {
-    if (e.target === e.currentTarget && !aiBusy) closeAiChatModal();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    const modal = aiEl('ai-chat-modal');
-    if (modal && !modal.hidden && !aiBusy) closeAiChatModal();
-  });
 }
 
 if (document.readyState === 'loading') {

@@ -4,7 +4,8 @@
  *
  *   GET  api.php?op=projects                        -> [{id,name}, ...]
  *   POST api.php?op=project_create      {name}      -> {ok,id,name}
- *   POST api.php?op=project_delete      {id}        -> {ok}
+ *   POST api.php?op=project_archive     {id}        -> {ok}
+ *   POST api.php?op=project_unarchive   {id}        -> {ok}
  *   GET  api.php?op=board&project=ID                -> {ok,data:{title,members,lists}}
  *   POST api.php?op=board_save&project=ID {title,members,lists} -> {ok}
  *
@@ -47,6 +48,26 @@ function fail(string $message, int $code = 400): void
     http_response_code($code);
     echo json_encode(['ok' => false, 'error' => $message]);
     exit;
+}
+
+/** True when the project exists and has archived_at set. */
+function project_is_archived(PDO $pdo, string $pid): bool
+{
+    if ($pid === '') {
+        return false;
+    }
+    $st = $pdo->prepare('SELECT archived_at FROM projects WHERE id = ?');
+    $st->execute([$pid]);
+    $v = $st->fetchColumn();
+    return $v !== false && $v !== null && trim((string) $v) !== '';
+}
+
+/** Reject mutating ops on archived projects (restore first). */
+function require_project_writable(PDO $pdo, string $pid): void
+{
+    if (project_is_archived($pdo, $pid)) {
+        fail('This project is archived and cannot be edited. Restore it first.', 403);
+    }
 }
 
 /** Log a server exception and return a generic client-safe error. */
@@ -376,6 +397,18 @@ try {
             echo json_encode(['ok' => true, 'message' => $msg]);
             break;
 
+        case 'check_reset': // {token}
+            $b     = json_body();
+            $token = (string) ($b['token'] ?? '');
+            if ($token === '') {
+                fail('Missing reset token.');
+            }
+            if (!password_reset_token_valid($pdo, $token)) {
+                fail('This reset link is invalid or has expired.');
+            }
+            echo json_encode(['ok' => true]);
+            break;
+
         case 'reset_password': // {token,password}
             $b        = json_body();
             $token    = (string) ($b['token'] ?? '');
@@ -410,20 +443,35 @@ try {
             if (!csrf_check()) {
                 fail('Bad CSRF token. Reload the page.', 419);
             }
+            $leaving = current_user();
+            if ($leaving) {
+                clear_user_presence($pdo, (string) $leaving['id']);
+            }
             logout();
             echo json_encode(['ok' => true]);
             break;
 
         case 'projects': // list projects the current user can access
             $me       = require_login();
-            $projects = rows(
+            $rows = rows(
                 $pdo,
-                'SELECT p.id, p.name
+                'SELECT p.id, p.name, p.archived_at, m.role
                    FROM projects p
                    JOIN members m ON m.project_id = p.id AND m.user_id = ?
-               ORDER BY p.position, p.created_at',
+               ORDER BY
+                   CASE WHEN p.archived_at IS NULL OR p.archived_at = \'\' THEN 0 ELSE 1 END,
+                   p.position, p.created_at',
                 [$me['id']]
             );
+            $projects = [];
+            foreach ($rows as $row) {
+                $projects[] = [
+                    'id'       => $row['id'],
+                    'name'     => $row['name'],
+                    'archived' => !empty($row['archived_at']),
+                    'role'     => (string) ($row['role'] ?? 'member'),
+                ];
+            }
             echo json_encode(['ok' => true, 'projects' => $projects]);
             break;
 
@@ -460,7 +508,7 @@ try {
             echo json_encode(['ok' => true, 'id' => $id, 'name' => $name]);
             break;
 
-        case 'project_delete': // {id} — owner only
+        case 'project_archive': // {id} — owner only; soft-hide, no delete
             $me = require_login();
             if (!csrf_check()) {
                 fail('Bad CSRF token. Reload the page.', 419);
@@ -474,26 +522,175 @@ try {
                 fail('You do not have access to this project.', 403);
             }
             if (($m['role'] ?? 'member') !== 'owner') {
-                fail('Only the project owner can delete it.', 403);
+                fail('Only the project owner can archive it.', 403);
             }
-            $st = $pdo->prepare('SELECT COUNT(*) FROM members WHERE user_id = ?');
+            $st = $pdo->prepare(
+                "SELECT COUNT(*) FROM projects p
+                   JOIN members m ON m.project_id = p.id AND m.user_id = ?
+                  WHERE (p.archived_at IS NULL OR p.archived_at = '')"
+            );
             $st->execute([$me['id']]);
             if ((int) $st->fetchColumn() <= 1) {
-                fail('Cannot delete your last project.');
+                fail('Cannot archive your last active project.');
             }
-            $pdo->prepare('DELETE FROM projects WHERE id = ?')->execute([$id]); // cascades
-            gc_uploads($pdo);
+            $pdo->prepare("UPDATE projects SET archived_at = ?, updated_at = ?, share_token = NULL WHERE id = ? AND (archived_at IS NULL OR archived_at = '')")
+                ->execute([gmdate('Y-m-d H:i:s'), gmdate('Y-m-d H:i:s'), $id]);
             echo json_encode(['ok' => true]);
+            break;
+
+        case 'project_unarchive': // {id} — owner only
+            $me = require_login();
+            if (!csrf_check()) {
+                fail('Bad CSRF token. Reload the page.', 419);
+            }
+            $id = (string) (json_body()['id'] ?? '');
+            if ($id === '') {
+                fail('Project id is required.');
+            }
+            $m = membership($pdo, $id);
+            if ($m === null) {
+                fail('You do not have access to this project.', 403);
+            }
+            if (($m['role'] ?? 'member') !== 'owner') {
+                fail('Only the project owner can restore it.', 403);
+            }
+            $pdo->prepare('UPDATE projects SET archived_at = NULL, updated_at = ? WHERE id = ?')
+                ->execute([gmdate('Y-m-d H:i:s'), $id]);
+            echo json_encode(['ok' => true]);
+            break;
+
+        case 'project_share_status': // GET ?project=ID — owner only
+            $me = require_login();
+            $pid = trim((string) ($_GET['project'] ?? ''));
+            if ($pid === '') {
+                fail('Project id is required.');
+            }
+            $m = membership($pdo, $pid);
+            if ($m === null) {
+                fail('You do not have access to this project.', 403);
+            }
+            if (($m['role'] ?? '') !== 'owner') {
+                fail('Only the project owner can manage the share link.', 403);
+            }
+            $st = $pdo->prepare('SELECT share_token, archived_at FROM projects WHERE id = ?');
+            $st->execute([$pid]);
+            $row = $st->fetch();
+            if (!$row) {
+                fail('Project not found.', 404);
+            }
+            $token = trim((string) ($row['share_token'] ?? ''));
+            echo json_encode([
+                'ok'       => true,
+                'enabled'  => $token !== '',
+                'token'    => $token !== '' ? $token : null,
+                'archived' => !empty($row['archived_at']),
+            ]);
+            break;
+
+        case 'project_share_enable': // {project} — owner only; create or rotate token
+            $me = require_login();
+            if (!csrf_check()) {
+                fail('Bad CSRF token. Reload the page.', 419);
+            }
+            $pid = trim((string) (json_body()['project'] ?? ''));
+            if ($pid === '') {
+                fail('Project id is required.');
+            }
+            $m = membership($pdo, $pid);
+            if ($m === null) {
+                fail('You do not have access to this project.', 403);
+            }
+            if (($m['role'] ?? '') !== 'owner') {
+                fail('Only the project owner can manage the share link.', 403);
+            }
+            require_project_writable($pdo, $pid);
+            $token = bin2hex(random_bytes(24));
+            $pdo->prepare('UPDATE projects SET share_token = ?, updated_at = ? WHERE id = ?')
+                ->execute([$token, gmdate('Y-m-d H:i:s'), $pid]);
+            echo json_encode(['ok' => true, 'enabled' => true, 'token' => $token]);
+            break;
+
+        case 'project_share_disable': // {project} — owner only
+            $me = require_login();
+            if (!csrf_check()) {
+                fail('Bad CSRF token. Reload the page.', 419);
+            }
+            $pid = trim((string) (json_body()['project'] ?? ''));
+            if ($pid === '') {
+                fail('Project id is required.');
+            }
+            $m = membership($pdo, $pid);
+            if ($m === null) {
+                fail('You do not have access to this project.', 403);
+            }
+            if (($m['role'] ?? '') !== 'owner') {
+                fail('Only the project owner can manage the share link.', 403);
+            }
+            $pdo->prepare('UPDATE projects SET share_token = NULL, updated_at = ? WHERE id = ?')
+                ->execute([gmdate('Y-m-d H:i:s'), $pid]);
+            echo json_encode(['ok' => true, 'enabled' => false]);
+            break;
+
+        case 'board_public': // GET ?token= [&since=] — anonymous read-only board
+            $token = trim((string) ($_GET['token'] ?? ''));
+            if ($token === '' || !preg_match('/^[a-f0-9]{32,64}$/i', $token)) {
+                // Still consume IP budget so invalid-token probing is throttled.
+                rate_limit($pdo, 'share:ip:' . client_ip(), SHARE_PUBLIC_RATE_MAX, SHARE_PUBLIC_RATE_WINDOW);
+                fail('Invalid or missing share link.', 404);
+            }
+            rate_limit($pdo, 'share:ip:' . client_ip(), SHARE_PUBLIC_RATE_MAX, SHARE_PUBLIC_RATE_WINDOW);
+            rate_limit(
+                $pdo,
+                'share:tok:' . hash('sha256', strtolower($token)),
+                SHARE_PUBLIC_RATE_MAX,
+                SHARE_PUBLIC_RATE_WINDOW
+            );
+
+            $st = $pdo->prepare(
+                'SELECT id, archived_at, updated_at FROM projects WHERE share_token = ? LIMIT 1'
+            );
+            $st->execute([$token]);
+            $proj = $st->fetch();
+            if (!$proj) {
+                fail('This share link is invalid or has been turned off.', 404);
+            }
+            if (!empty($proj['archived_at'])) {
+                fail('This project is archived and can no longer be viewed via share link.', 404);
+            }
+
+            $pid = (string) $proj['id'];
+            $updatedAt = trim((string) ($proj['updated_at'] ?? ''));
+            if ($updatedAt === '') {
+                $updatedAt = project_updated_at($pdo, $pid);
+            }
+
+            // Cheap poll: clients send the last stamp; skip full payload when unchanged.
+            $since = trim((string) ($_GET['since'] ?? ''));
+            if ($since !== '' && $since === $updatedAt) {
+                echo json_encode([
+                    'ok' => true,
+                    'unchanged' => true,
+                    'updated_at' => $updatedAt,
+                ], JSON_UNESCAPED_SLASHES);
+                break;
+            }
+
+            $data = load_board_public($pdo, $pid);
+            $data['updated_at'] = $updatedAt;
+            echo json_encode(['ok' => true, 'data' => $data], JSON_UNESCAPED_SLASHES);
             break;
 
         case 'board': // GET ?project=ID
             $me  = require_login();
             $pid = (string) ($_GET['project'] ?? '');
-            if ($pid === '') { // default to the user's first accessible project
+            if ($pid === '') { // default to the user's first active project
                 $st = $pdo->prepare(
-                    'SELECT p.id FROM projects p
+                    "SELECT p.id FROM projects p
                        JOIN members m ON m.project_id = p.id AND m.user_id = ?
-                   ORDER BY p.position, p.created_at LIMIT 1'
+                   ORDER BY
+                       CASE WHEN p.archived_at IS NULL OR p.archived_at = '' THEN 0 ELSE 1 END,
+                       p.position, p.created_at
+                   LIMIT 1"
                 );
                 $st->execute([$me['id']]);
                 $pid = (string) $st->fetchColumn();
@@ -556,6 +753,7 @@ try {
             if (membership($pdo, $pid) === null) {
                 fail('You do not have access to this project.', 403);
             }
+            require_project_writable($pdo, $pid);
             $st = $pdo->prepare('SELECT id, name, email_verified_at FROM users WHERE email = ?');
             $st->execute([$email]);
             $invitee = $st->fetch();
@@ -710,6 +908,7 @@ try {
                 fail('You do not have access to this card.', 403);
             }
             $pid = (string) $cardRow['project_id'];
+            require_project_writable($pdo, $pid);
             $cardTitle = (string) ($cardRow['card_title'] ?? 'Card');
 
             $id   = 'cmt_' . bin2hex(random_bytes(6));
@@ -766,6 +965,7 @@ try {
                 fail('You do not have access to this card.', 403);
             }
             $pid = (string) $cardRow['project_id'];
+            require_project_writable($pdo, $pid);
             $cardTitle = (string) ($cardRow['card_title'] ?? 'Card');
             $bot = ensure_ai_chat_user($pdo);
 
@@ -894,13 +1094,15 @@ try {
             $ust->execute([$me['id']]);
             $unread = (int) $ust->fetchColumn();
 
-            $payload = ['ok' => true, 'notifications' => $items, 'unread' => $unread];
+            $payload = ['ok' => true, 'notifications' => $items, 'unread' => $unread, 'online' => []];
 
-            // Cheap board sync stamp for the open project (same poll as notifications).
+            // Cheap board sync stamp + presence heartbeat for the open project.
             $syncPid = trim((string) ($_GET['project'] ?? ''));
             if ($syncPid !== '' && membership($pdo, $syncPid) !== null) {
+                touch_user_presence($pdo, (string) $me['id'], $syncPid);
                 $payload['board_updated_at'] = project_updated_at($pdo, $syncPid);
                 $payload['project_id'] = $syncPid;
+                $payload['online'] = project_online_users($pdo, $syncPid);
             }
 
             echo json_encode($payload);
@@ -943,6 +1145,7 @@ try {
             if ($m === null) {
                 fail('Access denied.', 403);
             }
+            require_project_writable($pdo, (string) $row['project_id']);
             $isAuthor = ($row['user_id'] === $me['id']);
             $isOwner  = (($m['role'] ?? '') === 'owner');
             if (!$isAuthor && !$isOwner) {
@@ -1028,6 +1231,75 @@ function touch_project(PDO $pdo, string $pid): string
     return $now;
 }
 
+/**
+ * How long after the last heartbeat a user stays "online".
+ * Fixed at 6s so a couple of missed 2s polls don't flicker offline.
+ */
+function presence_ttl_seconds(): int
+{
+    return 6;
+}
+
+/** Record that $userId is viewing $projectId right now. */
+function touch_user_presence(PDO $pdo, string $userId, string $projectId): void
+{
+    if ($userId === '' || $projectId === '') {
+        return;
+    }
+    $now = gmdate('Y-m-d H:i:s');
+    $pdo->prepare(
+        'INSERT INTO user_presence (user_id, project_id, last_seen) VALUES (?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           project_id = excluded.project_id,
+           last_seen  = excluded.last_seen'
+    )->execute([$userId, $projectId, $now]);
+}
+
+/** Drop presence when the user signs out. */
+function clear_user_presence(PDO $pdo, string $userId): void
+{
+    if ($userId === '') {
+        return;
+    }
+    $pdo->prepare('DELETE FROM user_presence WHERE user_id = ?')->execute([$userId]);
+}
+
+/**
+ * Project members who heartbeated recently (same project).
+ *
+ * @return list<array{id:string,name:string,photo_url:?string,color:string,is_you:bool}>
+ */
+function project_online_users(PDO $pdo, string $projectId): array
+{
+    if ($projectId === '') {
+        return [];
+    }
+    $me = current_user();
+    $meId = $me ? (string) $me['id'] : '';
+    $cutoff = gmdate('Y-m-d H:i:s', time() - presence_ttl_seconds());
+    $st = $pdo->prepare(
+        'SELECT u.id, u.name, u.photo_url, m.color
+           FROM user_presence p
+           JOIN users u ON u.id = p.user_id
+           JOIN members m ON m.user_id = p.user_id AND m.project_id = p.project_id
+          WHERE p.project_id = ?
+            AND p.last_seen >= ?
+          ORDER BY (u.id = ?) DESC, lower(u.name) ASC'
+    );
+    $st->execute([$projectId, $cutoff, $meId]);
+    $out = [];
+    foreach ($st->fetchAll() as $row) {
+        $out[] = [
+            'id'        => (string) $row['id'],
+            'name'      => (string) $row['name'],
+            'photo_url' => $row['photo_url'] ?? null,
+            'color'     => (string) ($row['color'] ?: pick_member_color((string) $row['id'])),
+            'is_you'    => ($meId !== '' && (string) $row['id'] === $meId),
+        ];
+    }
+    return $out;
+}
+
 /** Current projects.updated_at (or now if missing). */
 function project_updated_at(PDO $pdo, string $pid): string
 {
@@ -1048,11 +1320,11 @@ function load_board(PDO $pdo, string $pid, array $me): array
     if ($pid === '') {
         return [
             'title' => '', 'members' => [], 'lists' => [],
-            'current_member_id' => null, 'current_role' => null, 'updated_at' => null,
+            'current_member_id' => null, 'current_role' => null, 'updated_at' => null, 'archived' => false,
         ];
     }
 
-    $st = $pdo->prepare('SELECT name, updated_at FROM projects WHERE id = ?');
+    $st = $pdo->prepare('SELECT name, updated_at, archived_at FROM projects WHERE id = ?');
     $st->execute([$pid]);
     $proj = $st->fetch();
     if ($proj === false) {
@@ -1063,6 +1335,7 @@ function load_board(PDO $pdo, string $pid, array $me): array
     if ($updatedAt === '') {
         $updatedAt = touch_project($pdo, $pid);
     }
+    $archived = !empty($proj['archived_at']);
 
     $members       = [];
     $currentMember = null;
@@ -1107,7 +1380,28 @@ function load_board(PDO $pdo, string $pid, array $me): array
         'current_member_id' => $currentMember,
         'current_role'      => $currentRole,
         'updated_at'        => $updatedAt,
+        'archived'          => $archived,
     ];
+}
+
+/**
+ * Public share-link payload: same board shape, no emails / membership role.
+ *
+ * @return array<string,mixed>
+ */
+function load_board_public(PDO $pdo, string $pid): array
+{
+    $data = load_board($pdo, $pid, ['id' => '']);
+    foreach ($data['members'] as &$m) {
+        $m['email'] = '';
+        $m['is_you'] = false;
+        // Keep role for Owner badge display only; guests cannot act on it.
+    }
+    unset($m);
+    $data['current_member_id'] = null;
+    $data['current_role'] = null;
+    $data['share'] = true;
+    return $data;
 }
 
 function load_cards(PDO $pdo, string $listId): array
@@ -1232,6 +1526,7 @@ function save_board(PDO $pdo, string $pid, array $data, array $me): void
     if ($mine === null) {
         fail('You do not have access to this project.', 403);
     }
+    require_project_writable($pdo, $pid);
     $isOwner = (($mine['role'] ?? 'member') === 'owner');
 
     // Existing members keyed by id. The user_id/role/email fields are server-

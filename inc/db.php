@@ -192,6 +192,12 @@ function db_init(PDO $pdo): void
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS user_presence (
+            user_id    TEXT PRIMARY KEY,
+            project_id TEXT,
+            last_seen  TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
     ");
 
     // Add the account-link columns to the legacy `members` table if this is an
@@ -204,6 +210,9 @@ function db_init(PDO $pdo): void
     add_column_if_missing($pdo, 'projects', 'updated_at', 'TEXT');
     // Backfill any NULL updated_at values (ALTER cannot use datetime('now') default on older SQLite).
     $pdo->exec("UPDATE projects SET updated_at = COALESCE(created_at, datetime('now')) WHERE updated_at IS NULL OR updated_at = ''");
+    add_column_if_missing($pdo, 'projects', 'archived_at', 'TEXT');
+    add_column_if_missing($pdo, 'projects', 'share_token', 'TEXT');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_share_token ON projects(share_token)');
     add_column_if_missing($pdo, 'cards', 'updated_at', 'TEXT');
     $pdo->exec("UPDATE cards SET updated_at = datetime('now') WHERE updated_at IS NULL OR updated_at = ''");
     // One-shot: when the verification column is first added, treat existing

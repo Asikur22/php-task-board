@@ -6,8 +6,8 @@
 # Zip files
 *.zip
 
-# migrations files
-migrations/*
+# migrations: keep runner tracked; ignore ad-hoc SQL dumps
+migrations/
 
 # database files
 database/*

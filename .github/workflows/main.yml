@@ -25,5 +25,6 @@ jobs:
             /uploads/*
             /logs/*
             /migrations/*
+            .env.example
             **/.git*
             **/.git*/**

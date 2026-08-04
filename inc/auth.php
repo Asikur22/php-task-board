@@ -7,7 +7,7 @@
  *   project access        membership(), require_membership()
  *   accounts              create_user(), login_as(), logout()
  *   email verification    create_email_verification(), consume_email_verification()
- *   password reset        create_password_reset(), consume_password_reset()
+ *   password reset        create_password_reset(), password_reset_token_valid(), consume_password_reset()
  *   mail                  deliver_reset_link(), deliver_verification_email()
  *   brute-force throttle  throttle_check(), throttle_record_failure(), throttle_clear()
  *   first-run setup       adopt_orphan_projects(), seed_starter_project()
@@ -51,6 +51,10 @@ const MAIL_RATE_MAX = 3;
 const MAIL_RATE_WINDOW = 900;          // 15 min
 const REGISTER_RATE_MAX = 5;
 const REGISTER_RATE_WINDOW = 3600;     // 1 hour
+
+/** Anonymous share-board reads (per IP / per token, per window). */
+const SHARE_PUBLIC_RATE_MAX = 60;      // ~1/sec average; share UI polls ~every 5s
+const SHARE_PUBLIC_RATE_WINDOW = 60;   // 1 min
 
 // SMTP — prefer MAIL_* (Laravel-style); SMTP_* still accepted as aliases.
 define('SMTP_HOST', tb_env('MAIL_HOST', tb_env('SMTP_HOST', '')) ?? '');
@@ -531,6 +535,28 @@ function create_password_reset(PDO $pdo, string $userId): string
     return $token;
 }
 
+/** Check whether a reset token is still valid (unused and unexpired). */
+function password_reset_token_valid(PDO $pdo, string $token): bool
+{
+    if ($token === '') {
+        return false;
+    }
+    $st = $pdo->prepare('SELECT expires_at, used_at FROM password_resets WHERE token_hash = ? LIMIT 1');
+    $st->execute([hash_token($token)]);
+    $row = $st->fetch();
+    if (!$row || $row['used_at'] !== null) {
+        return false;
+    }
+    return strtotime((string) $row['expires_at']) >= time();
+}
+
+/** Mark every unused reset token for $userId as consumed. */
+function invalidate_password_resets(PDO $pdo, string $userId): void
+{
+    $pdo->prepare("UPDATE password_resets SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL")
+        ->execute([$userId]);
+}
+
 /** Consume a reset token; return the user_id if valid+unused+unexpired, else ''. */
 function consume_password_reset(PDO $pdo, string $token): string
 {
@@ -543,7 +569,7 @@ function consume_password_reset(PDO $pdo, string $token): string
     if (strtotime((string) $row['expires_at']) < time()) {
         return '';
     }
-    $pdo->prepare("UPDATE password_resets SET used_at = datetime('now') WHERE id = ?")->execute([$row['id']]);
+    invalidate_password_resets($pdo, (string) $row['user_id']);
     return (string) $row['user_id'];
 }
 

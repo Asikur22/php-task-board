@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Task Board</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/style.css?v=1.10.47">
+  <link rel="stylesheet" href="assets/style.css?v=1.10.63">
   <!-- Flatpickr date picker -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
@@ -108,12 +108,58 @@
       <div class="project-switcher">
         <select id="project-select" aria-label="Select project"></select>
         <button id="btn-new-project" class="btn btn-ghost btn-icon" type="button" title="New project">＋</button>
-        <button id="btn-del-project" class="btn btn-ghost btn-icon" type="button" title="Delete project">🗑</button>
+        <button id="btn-archive-project" class="btn btn-ghost btn-icon" type="button" title="Archive project">📦</button>
       </div>
       <h1 id="board-title" contenteditable="true" spellcheck="false">Task Board</h1>
+      <span id="share-mode-badge" class="share-mode-badge" hidden>View only</span>
       <div class="header-actions">
-        <button type="button" id="btn-ai-chat" class="btn btn-ghost" title="Create cards from a client message">✨ AI Chat</button>
-        <button id="btn-members" class="btn btn-ghost">👥 Members</button>
+        <div id="presence" class="presence" hidden>
+          <button type="button" id="presence-toggle" class="presence-toggle" aria-haspopup="true" aria-expanded="false" title="Online now">
+            <span id="presence-avatars" class="presence-avatars" aria-hidden="true"></span>
+            <span id="presence-label" class="presence-label">Online</span>
+          </button>
+          <div id="presence-menu" class="presence-menu" hidden role="menu" aria-label="Online users">
+            <div class="presence-menu-title">Online now</div>
+            <div id="presence-list" class="presence-list"></div>
+            <div id="presence-empty" class="presence-empty" hidden>No one else is here</div>
+          </div>
+        </div>
+        <div id="share-popover" class="share-popover" hidden>
+          <button type="button" id="share-popover-toggle" class="btn btn-ghost btn-icon share-popover-toggle" aria-haspopup="true" aria-expanded="false" title="Share board">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <path d="M8.59 13.51 15.42 17.49"/>
+              <path d="M15.41 6.51 8.59 10.49"/>
+            </svg>
+          </button>
+          <div id="share-popover-menu" class="share-popover-menu" hidden role="dialog" aria-label="Share board">
+            <div class="share-popover-title">Share board</div>
+            <p class="share-popover-hint">Anyone with the link can view lists and cards, but cannot edit.</p>
+            <div id="share-link-off">
+              <button type="button" id="share-enable" class="btn btn-primary btn-sm btn-block">Create share link</button>
+            </div>
+            <div id="share-link-on" hidden>
+              <div class="share-link-row">
+                <input id="share-url" class="member-input" type="text" readonly aria-label="Share link">
+                <button type="button" id="share-copy" class="btn btn-primary btn-mini">Copy</button>
+              </div>
+              <div class="share-link-actions">
+                <button type="button" id="share-rotate" class="btn btn-soft btn-mini">New link</button>
+                <button type="button" id="share-disable" class="btn btn-soft btn-mini btn-remove-photo">Turn off</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <button type="button" id="btn-ai-chat" class="btn btn-ghost" title="Create cards from a client message">
+          <span class="btn-ico" aria-hidden="true">✨</span>
+          <span class="btn-label">AI Chat</span>
+        </button>
+        <button id="btn-members" class="btn btn-ghost" type="button" title="Members">
+          <span class="btn-ico" aria-hidden="true">👥</span>
+          <span class="btn-label">Members</span>
+        </button>
         <button type="button" id="btn-notifications" class="notif-bell" title="Notifications" aria-label="Notifications" hidden>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -381,94 +427,126 @@
 
     <!-- Profile modal -->
     <div id="profile-modal" class="modal-overlay" hidden>
-      <div class="modal modal-sm" role="dialog" aria-modal="true" aria-label="Edit Profile">
+      <div class="modal modal-profile" role="dialog" aria-modal="true" aria-label="Settings">
         <button id="profile-close" class="modal-close" aria-label="Close">&times;</button>
-        <h2 class="modal-heading">My Profile</h2>
+        <h2 class="modal-heading">Settings</h2>
 
-        <form id="profile-form">
-          <div class="profile-avatar-section">
-            <div class="avatar avatar-lg" id="profile-avatar-preview">
-              <span id="profile-avatar-fallback"></span>
-              <img id="profile-avatar-img" alt="Profile photo" hidden>
-            </div>
-            <div class="profile-avatar-actions">
-              <button type="button" id="btn-upload-photo" class="btn btn-soft btn-mini">Upload Photo</button>
-              <button type="button" id="btn-remove-photo" class="btn btn-soft btn-mini btn-remove-photo" hidden>Remove Photo</button>
-              <input type="file" id="profile-photo-input" accept="image/*" hidden>
-            </div>
+        <div class="profile-layout">
+          <nav class="profile-nav" aria-label="Settings sections" role="tablist">
+            <button type="button" class="profile-nav-btn active" role="tab" aria-selected="true" data-profile-tab="profile">Profile</button>
+            <button type="button" class="profile-nav-btn" role="tab" aria-selected="false" data-profile-tab="appearance">Appearance</button>
+            <button type="button" class="profile-nav-btn" role="tab" aria-selected="false" data-profile-tab="projects">Projects</button>
+            <button type="button" class="profile-nav-btn" role="tab" aria-selected="false" data-profile-tab="data">Board Data</button>
+            <button type="button" class="profile-nav-btn" role="tab" aria-selected="false" data-profile-tab="ai">AI Cache</button>
+            <button type="button" class="profile-nav-btn profile-nav-logout" id="btn-logout" data-profile-action="logout">Log out</button>
+          </nav>
+
+          <div class="profile-panels">
+            <section id="profile-panel-profile" class="profile-panel active" role="tabpanel" data-profile-panel="profile">
+              <form id="profile-form">
+                <h3 class="profile-panel-title">Profile</h3>
+                <p class="modal-hint">Update your photo, display name, and password.</p>
+
+                <div class="profile-avatar-section">
+                  <div class="avatar avatar-lg" id="profile-avatar-preview">
+                    <span id="profile-avatar-fallback"></span>
+                    <img id="profile-avatar-img" alt="Profile photo" hidden>
+                  </div>
+                  <div class="profile-avatar-actions">
+                    <button type="button" id="btn-upload-photo" class="btn btn-soft btn-mini">Upload Photo</button>
+                    <button type="button" id="btn-remove-photo" class="btn btn-soft btn-mini btn-remove-photo" hidden>Remove Photo</button>
+                    <input type="file" id="profile-photo-input" accept="image/*" hidden>
+                  </div>
+                </div>
+
+                <div class="modal-section">
+                  <label class="modal-label" for="profile-name">Display Name</label>
+                  <input id="profile-name" class="member-input" type="text" maxlength="60" placeholder="Your name" required>
+                </div>
+
+                <div class="modal-section">
+                  <label class="modal-label" for="profile-email">Email</label>
+                  <input id="profile-email" class="member-input input-disabled" type="email" disabled readonly>
+                </div>
+
+                <div class="modal-section">
+                  <span class="modal-label">Change Password <span class="modal-hint-inline">(optional)</span></span>
+                  <div class="password-field margin-v">
+                    <input id="profile-cur-pass" class="member-input" type="password" placeholder="Current password" autocomplete="current-password">
+                    <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
+                      <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                      <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    </button>
+                  </div>
+                  <div class="password-field margin-v">
+                    <input id="profile-new-pass" class="member-input" type="password" placeholder="New password (min 8 chars)" autocomplete="new-password" minlength="8">
+                    <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
+                      <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                      <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <p id="profile-error" class="auth-error" role="alert" hidden></p>
+                <p id="profile-success" class="auth-success" role="status" hidden></p>
+
+                <div class="modal-footer profile-panel-footer">
+                  <button type="button" id="profile-cancel" class="btn btn-soft">Cancel</button>
+                  <button type="submit" id="profile-save" class="btn btn-primary">Save Profile</button>
+                </div>
+              </form>
+            </section>
+
+            <section id="profile-panel-appearance" class="profile-panel" role="tabpanel" data-profile-panel="appearance" hidden>
+              <h3 class="profile-panel-title">Appearance</h3>
+              <p class="modal-hint">Choose a background theme for your board.</p>
+              <div class="modal-section">
+                <span class="modal-label">Background Theme</span>
+                <div class="bg-presets" id="bg-presets">
+                  <button type="button" class="bg-swatch" data-bg="linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #311042 100%)" style="background: linear-gradient(135deg, #0f172a, #311042);" title="Midnight Slate"></button>
+                  <button type="button" class="bg-swatch" data-bg="linear-gradient(135deg, #0f172a 0%, #0369a1 50%, #0284c7 100%)" style="background: linear-gradient(135deg, #0f172a, #0284c7);" title="Ocean Blue"></button>
+                  <button type="button" class="bg-swatch" data-bg="linear-gradient(135deg, #064e3b 0%, #047857 50%, #0f172a 100%)" style="background: linear-gradient(135deg, #064e3b, #047857);" title="Forest Moss"></button>
+                  <button type="button" class="bg-swatch" data-bg="linear-gradient(135deg, #4c1d95 0%, #831843 50%, #9f1239 100%)" style="background: linear-gradient(135deg, #4c1d95, #9f1239);" title="Sunset Violet"></button>
+                  <button type="button" class="bg-swatch" data-bg="#0f172a" style="background: #0f172a;" title="Dark Onyx"></button>
+                  <label class="bg-color-label" title="Custom color">
+                    <input type="color" id="bg-custom-picker" value="#0f172a">
+                    <span>Custom</span>
+                  </label>
+                </div>
+              </div>
+            </section>
+
+            <section id="profile-panel-projects" class="profile-panel" role="tabpanel" data-profile-panel="projects" hidden>
+              <h3 class="profile-panel-title">Projects</h3>
+              <p class="modal-hint">Restore archived projects you own.</p>
+              <div id="profile-archived-section" class="profile-actions-section">
+                <span class="modal-label">Archived Projects</span>
+                <div id="profile-archived-list" class="profile-archived-list"></div>
+                <p id="profile-archived-empty" class="empty-hint" hidden>No archived projects.</p>
+              </div>
+            </section>
+
+            <section id="profile-panel-data" class="profile-panel" role="tabpanel" data-profile-panel="data" hidden>
+              <h3 class="profile-panel-title">Board Data</h3>
+              <p class="modal-hint">Export or import the current board as JSON.</p>
+              <div class="profile-actions-section">
+                <div class="profile-action-buttons">
+                  <button id="btn-export" class="btn btn-soft btn-sm" type="button">📥 Export Board</button>
+                  <button id="btn-import" class="btn btn-soft btn-sm" type="button">📤 Import Board</button>
+                  <input type="file" id="import-file" accept="application/json,.json" hidden>
+                </div>
+              </div>
+            </section>
+
+            <section id="profile-panel-ai" class="profile-panel" role="tabpanel" data-profile-panel="ai" hidden>
+              <h3 class="profile-panel-title">AI Cache</h3>
+              <p class="modal-hint">Manage the WebLLM model stored in this browser.</p>
+              <div class="profile-actions-section profile-ai-cache-section">
+                <p class="modal-hint ai-cache-hint" id="profile-ai-cache-status">Checking cache size…</p>
+                <button id="btn-clear-ai-cache" class="btn btn-soft btn-sm btn-block" type="button" disabled>Clear AI cache</button>
+              </div>
+            </section>
           </div>
-
-          <div class="modal-section">
-            <label class="modal-label" for="profile-name">Display Name</label>
-            <input id="profile-name" class="member-input" type="text" maxlength="60" placeholder="Your name" required>
-          </div>
-
-          <div class="modal-section">
-            <label class="modal-label" for="profile-email">Email</label>
-            <input id="profile-email" class="member-input input-disabled" type="email" disabled readonly>
-          </div>
-
-          <hr class="modal-divider">
-
-          <div class="modal-section">
-            <span class="modal-label">Change Password <span class="modal-hint-inline">(optional)</span></span>
-            <div class="password-field margin-v">
-              <input id="profile-cur-pass" class="member-input" type="password" placeholder="Current password" autocomplete="current-password">
-              <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
-                <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
-                <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-              </button>
-            </div>
-            <div class="password-field margin-v">
-              <input id="profile-new-pass" class="member-input" type="password" placeholder="New password (min 8 chars)" autocomplete="new-password" minlength="8">
-              <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
-                <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
-                <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-              </button>
-            </div>
-          </div>
-          <div class="modal-section">
-            <span class="modal-label">Background Theme</span>
-            <div class="bg-presets" id="bg-presets">
-              <button type="button" class="bg-swatch" data-bg="linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #311042 100%)" style="background: linear-gradient(135deg, #0f172a, #311042);" title="Midnight Slate"></button>
-              <button type="button" class="bg-swatch" data-bg="linear-gradient(135deg, #0f172a 0%, #0369a1 50%, #0284c7 100%)" style="background: linear-gradient(135deg, #0f172a, #0284c7);" title="Ocean Blue"></button>
-              <button type="button" class="bg-swatch" data-bg="linear-gradient(135deg, #064e3b 0%, #047857 50%, #0f172a 100%)" style="background: linear-gradient(135deg, #064e3b, #047857);" title="Forest Moss"></button>
-              <button type="button" class="bg-swatch" data-bg="linear-gradient(135deg, #4c1d95 0%, #831843 50%, #9f1239 100%)" style="background: linear-gradient(135deg, #4c1d95, #9f1239);" title="Sunset Violet"></button>
-              <button type="button" class="bg-swatch" data-bg="#0f172a" style="background: #0f172a;" title="Dark Onyx"></button>
-              <label class="bg-color-label" title="Custom color">
-                <input type="color" id="bg-custom-picker" value="#0f172a">
-                <span>Custom</span>
-              </label>
-            </div>
-          </div>
-
-          <p id="profile-error" class="auth-error" role="alert" hidden></p>
-          <p id="profile-success" class="auth-success" role="status" hidden></p>
-
-          <div class="modal-footer">
-            <button type="button" id="profile-cancel" class="btn btn-soft">Cancel</button>
-            <button type="submit" id="profile-save" class="btn btn-primary">Save Profile</button>
-          </div>
-        </form>
-
-        <hr class="modal-divider">
-
-        <div class="profile-actions-section">
-          <span class="modal-label">Board Data & Account</span>
-          <div class="profile-action-buttons">
-            <button id="btn-export" class="btn btn-soft btn-sm" type="button">📥 Export Board</button>
-            <button id="btn-import" class="btn btn-soft btn-sm" type="button">📤 Import Board</button>
-            <input type="file" id="import-file" accept="application/json,.json" hidden>
-          </div>
-          <button id="btn-logout" class="btn btn-danger btn-block" type="button">Log out</button>
-        </div>
-
-        <hr class="modal-divider">
-
-        <div class="profile-actions-section profile-ai-cache-section">
-          <span class="modal-label">AI Model Cache (WebLLM)</span>
-          <p class="modal-hint ai-cache-hint" id="profile-ai-cache-status">Checking cache size…</p>
-          <button id="btn-clear-ai-cache" class="btn btn-soft btn-sm btn-block" type="button" disabled>Clear AI cache</button>
         </div>
       </div>
     </div>
@@ -487,7 +565,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <div id="app-version" class="app-version" title="Task Board Version">v1.10.47</div>
+  <div id="app-version" class="app-version" title="Task Board Version">v1.10.63</div>
 
   <!-- Notifications drawer (slides in from the right) -->
   <div id="notif-drawer-overlay" class="notif-drawer-overlay" hidden>
@@ -511,7 +589,7 @@
     </aside>
   </div>
 
-  <script src="assets/app.js?v=1.10.47"></script>
-  <script src="assets/ai-chat.js?v=1.10.47"></script>
+  <script src="assets/app.js?v=1.10.63"></script>
+  <script src="assets/ai-chat.js?v=1.10.63"></script>
 </body>
 </html>
