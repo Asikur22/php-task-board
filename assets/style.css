@@ -459,6 +459,21 @@ body.share-mode .card {
 .list-color {
   position: relative;
   flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+.list-header:hover .list-color,
+.list-header:focus-within .list-color,
+.list-color.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (hover: none) {
+  .list-color {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .list-color-toggle {
   display: block;
@@ -2540,6 +2555,12 @@ body.share-mode .card {
 }
 .profile-archived-item .btn {
   flex: 0 0 auto;
+}
+.profile-archived-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 .btn-sm {
   font-size: 13px;

@@ -848,6 +848,23 @@ async function restoreArchivedProject(projectId) {
   }
 }
 
+async function deleteArchivedProject(projectId) {
+  const cur = projects.find((p) => p.id === projectId);
+  if (!cur || !cur.archived) return;
+  if (!confirm(`Permanently delete "${cur.name}"? This cannot be undone.`)) return;
+  if (!confirm(`Delete "${cur.name}" and all of its lists, cards, and files?`)) return;
+  try {
+    const json = await postJSON(`${API}?op=project_delete`, { id: projectId });
+    if (!json.ok) { toast(json.error || 'Could not delete project.'); return; }
+    await loadProjects();
+    renderProjectSelect();
+    renderArchivedProjectsList();
+    toast('Project deleted.');
+  } catch (err) {
+    toast('Could not delete project.');
+  }
+}
+
 function renderArchivedProjectsList() {
   const list = document.getElementById('profile-archived-list');
   const empty = document.getElementById('profile-archived-empty');
@@ -863,11 +880,19 @@ function renderArchivedProjectsList() {
   archived.forEach((p) => {
     list.appendChild(el('div', { class: 'profile-archived-item' },
       el('span', { class: 'profile-archived-name', title: p.name }, p.name),
-      el('button', {
-        type: 'button',
-        class: 'btn btn-soft btn-mini',
-        onclick: () => restoreArchivedProject(p.id),
-      }, 'Restore')
+      el('div', { class: 'profile-archived-actions' },
+        el('button', {
+          type: 'button',
+          class: 'btn btn-soft btn-mini btn-remove-photo',
+          title: 'Permanently delete',
+          onclick: () => deleteArchivedProject(p.id),
+        }, 'Delete'),
+        el('button', {
+          type: 'button',
+          class: 'btn btn-soft btn-mini',
+          onclick: () => restoreArchivedProject(p.id),
+        }, 'Restore')
+      )
     ));
   });
 }
@@ -1490,13 +1515,23 @@ function addCard(listId) {
   list.cards.push(card);
   render();
   save(card.id);
-  openModal(card.id);
+  openModal(card.id, { focusTitle: true });
 }
 
 // ---------------------------------------------------------------------------
 // Card editor modal
 // ---------------------------------------------------------------------------
-function openModal(cardId) {
+function focusModalTitle() {
+  if (shareMode || !titleInput || titleInput.contentEditable === 'false') return;
+  titleInput.focus();
+  const range = document.createRange();
+  range.selectNodeContents(titleInput);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function openModal(cardId, { focusTitle = false } = {}) {
   if (clickGuard.moved) return;
   const card = findCardAnywhere(cardId);
   if (!card) return;
@@ -1533,6 +1568,10 @@ function openModal(cardId) {
   renderModalComments();
   renderModalImages();
   modal.hidden = false;
+  if (focusTitle) {
+    // Wait a frame so the modal is visible before focusing.
+    requestAnimationFrame(() => focusModalTitle());
+  }
 }
 
 function closeModal() {

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/style.css?v=1.10.67">
+  <link rel="stylesheet" href="assets/style.css?v=1.10.70">
   <!-- Flatpickr date picker -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
@@ -521,7 +521,7 @@
 
             <section id="profile-panel-projects" class="profile-panel" role="tabpanel" data-profile-panel="projects" hidden>
               <h3 class="profile-panel-title">Projects</h3>
-              <p class="modal-hint">Restore archived projects you own.</p>
+              <p class="modal-hint">Archived projects you own can be restored or permanently deleted. Active projects must be archived first.</p>
               <div id="profile-archived-section" class="profile-actions-section">
                 <span class="modal-label">Archived Projects</span>
                 <div id="profile-archived-list" class="profile-archived-list"></div>
@@ -568,7 +568,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <div id="app-version" class="app-version" title="Task Board Version">v1.10.67</div>
+  <div id="app-version" class="app-version" title="Task Board Version">v1.10.70</div>
 
   <!-- Notifications drawer (slides in from the right) -->
   <div id="notif-drawer-overlay" class="notif-drawer-overlay" hidden>
@@ -592,7 +592,7 @@
     </aside>
   </div>
 
-  <script src="assets/app.js?v=1.10.67"></script>
-  <script src="assets/ai-chat.js?v=1.10.67"></script>
+  <script src="assets/app.js?v=1.10.70"></script>
+  <script src="assets/ai-chat.js?v=1.10.70"></script>
 </body>
 </html>

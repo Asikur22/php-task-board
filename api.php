@@ -6,6 +6,7 @@
  *   POST api.php?op=project_create      {name}      -> {ok,id,name}
  *   POST api.php?op=project_archive     {id}        -> {ok}
  *   POST api.php?op=project_unarchive   {id}        -> {ok}
+ *   POST api.php?op=project_delete      {id}        -> {ok}  (archived + owner only)
  *   GET  api.php?op=board&project=ID                -> {ok,data:{title,members,lists}}
  *   POST api.php?op=board_save&project=ID {title,members,lists} -> {ok}
  *
@@ -556,6 +557,30 @@ try {
             }
             $pdo->prepare('UPDATE projects SET archived_at = NULL, updated_at = ? WHERE id = ?')
                 ->execute([gmdate('Y-m-d H:i:s'), $id]);
+            echo json_encode(['ok' => true]);
+            break;
+
+        case 'project_delete': // {id} — owner only; must already be archived
+            $me = require_login();
+            if (!csrf_check()) {
+                fail('Bad CSRF token. Reload the page.', 419);
+            }
+            $id = (string) (json_body()['id'] ?? '');
+            if ($id === '') {
+                fail('Project id is required.');
+            }
+            $m = membership($pdo, $id);
+            if ($m === null) {
+                fail('You do not have access to this project.', 403);
+            }
+            if (($m['role'] ?? 'member') !== 'owner') {
+                fail('Only the project owner can delete it.', 403);
+            }
+            if (!project_is_archived($pdo, $id)) {
+                fail('Archive the project first before deleting it.', 400);
+            }
+            $pdo->prepare('DELETE FROM projects WHERE id = ?')->execute([$id]);
+            gc_uploads($pdo);
             echo json_encode(['ok' => true]);
             break;
 
