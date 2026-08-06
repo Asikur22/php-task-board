@@ -1149,6 +1149,7 @@ function renderList(list) {
   }
   headerChildren.push(el('span', titleProps, list.title));
   if (!shareMode) {
+    headerChildren.push(renderListColorPicker(list));
     headerChildren.push(el('button', {
       class: 'list-delete',
       title: 'Delete list',
@@ -1175,6 +1176,140 @@ function renderList(list) {
 
   return el('section', props, ...kids);
 }
+
+/** Normalize user/color-input values to #rrggbb, or null if invalid. */
+function normalizeHexColor(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return null;
+  if (!s.startsWith('#')) s = '#' + s;
+  if (/^#[0-9A-Fa-f]{3}$/.test(s)) {
+    s = `#${s[1]}${s[1]}${s[2]}${s[2]}${s[3]}${s[3]}`;
+  }
+  if (!/^#[0-9A-Fa-f]{6}$/.test(s)) return null;
+  return s.toLowerCase();
+}
+
+function closeListColorMenus(exceptRoot = null) {
+  document.querySelectorAll('.list-color.open').forEach((root) => {
+    if (root === exceptRoot) return;
+    root.classList.remove('open');
+    const menu = root.querySelector('.list-color-menu');
+    const toggle = root.querySelector('.list-color-toggle');
+    if (menu) menu.hidden = true;
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function applyListColor(list, hex, root) {
+  list.color = hex;
+  const section = root?.closest('.list');
+  if (section) {
+    section.classList.add('has-color');
+    section.style.setProperty('--list-accent', hex);
+  }
+  const toggle = root?.querySelector('.list-color-toggle');
+  const picker = root?.querySelector('.list-color-picker');
+  const hexInput = root?.querySelector('.list-color-hex');
+  if (toggle) toggle.style.background = hex;
+  if (picker && picker.value !== hex) picker.value = hex;
+  if (hexInput && document.activeElement !== hexInput) hexInput.value = hex;
+}
+
+function renderListColorPicker(list) {
+  const current = normalizeHexColor(list.color) || '#64748b';
+
+  const picker = el('input', {
+    type: 'color',
+    class: 'list-color-picker',
+    value: current,
+    'aria-label': 'Pick list color',
+    oninput: (e) => {
+      const hex = normalizeHexColor(e.target.value);
+      if (!hex) return;
+      applyListColor(list, hex, e.target.closest('.list-color'));
+    },
+    onchange: () => save(),
+  });
+
+  const hexInput = el('input', {
+    type: 'text',
+    class: 'list-color-hex',
+    value: current,
+    maxlength: '7',
+    spellcheck: 'false',
+    autocomplete: 'off',
+    'aria-label': 'Hex color',
+    title: 'Hex color (copy/paste)',
+    onclick: (e) => e.target.select(),
+    onkeydown: (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.target.blur();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeListColorMenus();
+      }
+    },
+    oninput: (e) => {
+      const hex = normalizeHexColor(e.target.value);
+      if (!hex) return;
+      applyListColor(list, hex, e.target.closest('.list-color'));
+    },
+    onchange: (e) => {
+      const hex = normalizeHexColor(e.target.value);
+      if (!hex) {
+        e.target.value = normalizeHexColor(list.color) || '#64748b';
+        return;
+      }
+      e.target.value = hex;
+      applyListColor(list, hex, e.target.closest('.list-color'));
+      save();
+    },
+  });
+
+  const menu = el('div', {
+    class: 'list-color-menu',
+    hidden: true,
+    role: 'dialog',
+    'aria-label': 'List color',
+    onclick: (e) => e.stopPropagation(),
+  },
+    el('div', { class: 'list-color-menu-title' }, 'List color'),
+    el('div', { class: 'list-color-row' }, picker, hexInput),
+  );
+
+  const toggle = el('button', {
+    type: 'button',
+    class: 'list-color-toggle',
+    title: 'List color',
+    'aria-label': 'List color',
+    'aria-haspopup': 'true',
+    'aria-expanded': 'false',
+    style: `background:${current}`,
+    onclick: (e) => {
+      e.stopPropagation();
+      const root = e.currentTarget.closest('.list-color');
+      const open = root.classList.contains('open');
+      closeListColorMenus();
+      if (open) return;
+      root.classList.add('open');
+      menu.hidden = false;
+      e.currentTarget.setAttribute('aria-expanded', 'true');
+      hexInput.focus();
+      hexInput.select();
+    },
+  });
+
+  return el('div', { class: 'list-color' }, toggle, menu);
+}
+
+document.addEventListener('click', () => closeListColorMenus());
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.querySelector('.list-color.open')) {
+    closeListColorMenus();
+  }
+});
 
 function renderCard(card) {
   const cover = card.images?.length

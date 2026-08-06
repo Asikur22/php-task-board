@@ -93,6 +93,7 @@ body.share-mode .add-list-tile,
 body.share-mode .add-card-btn,
 body.share-mode .list-delete,
 body.share-mode .list-handle,
+body.share-mode .list-color,
 body.share-mode #modal-delete,
 body.share-mode #modal-save,
 body.share-mode .checklist-add-row,
@@ -455,6 +456,94 @@ body.share-mode .card {
 }
 .list-title:focus { background: #fff; box-shadow: inset 0 0 0 2px var(--accent); }
 
+.list-color {
+  position: relative;
+  flex-shrink: 0;
+}
+.list-color-toggle {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 4px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, .22);
+  border-radius: 50%;
+  cursor: pointer;
+  background: #64748b;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .35);
+}
+.list-color-toggle:hover {
+  transform: scale(1.08);
+}
+.list-color-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 90;
+  width: 188px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .22), 0 0 0 1px rgba(15, 23, 42, .06);
+}
+.list-color-menu-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+.list-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.list-color-picker {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  background: none;
+  flex-shrink: 0;
+}
+.list-color-picker::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.list-color-picker::-webkit-color-swatch {
+  border: 1px solid rgba(15, 23, 42, .18);
+  border-radius: 8px;
+}
+.list-color-picker::-moz-color-swatch {
+  border: 1px solid rgba(15, 23, 42, .18);
+  border-radius: 8px;
+}
+.list-color-hex {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+  padding: 7px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  color: #0f172a;
+  background: #f8fafc;
+}
+.list-color-hex:focus {
+  outline: none;
+  border-color: #93c5fd;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .15);
+}
+
 .list-delete {
   border: none;
   background: transparent;
@@ -465,6 +554,7 @@ body.share-mode .card {
   height: 26px;
   border-radius: 6px;
   cursor: pointer;
+  flex-shrink: 0;
 }
 .list-delete:hover { background: rgba(220, 38, 38, .12); color: var(--danger); }
 
@@ -1885,6 +1975,7 @@ body.share-mode .card {
 
   .add-card-btn,
   .list-delete,
+  .list-color-toggle,
   .list-handle {
     min-height: 36px;
     min-width: 36px;
