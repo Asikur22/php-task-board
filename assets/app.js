@@ -2114,6 +2114,7 @@ async function importJson(e) {
 // Modal events & keyboard
 // ---------------------------------------------------------------------------
 document.getElementById('modal-close').onclick = closeModal;
+document.getElementById('modal-cancel').onclick = closeModal;
 document.getElementById('modal-save').onclick = saveCardFromModal;
 document.getElementById('modal-delete').onclick = deleteCardFromModal;
 
@@ -2232,8 +2233,6 @@ descStyle.addEventListener('change', () => {
   runDescCommand('formatBlock', tag);
   descEditable.focus();
 });
-
-modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
 // Header buttons
 document.getElementById('btn-export').onclick = exportJson;
@@ -2573,7 +2572,7 @@ document.addEventListener('keydown', (e) => {
     else if (!profileModal.hidden) closeProfileModal();
     else if (!membersModal.hidden) closeMembers();
     else if (!newProjectModal.hidden) closeNewProject();
-    else if (!modal.hidden) closeModal();
+    // Card editor does not close on Escape — use × or Cancel.
   }
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !modal.hidden) {
     if (!descEditor.hidden) { e.preventDefault(); saveDescEdit(); return; }

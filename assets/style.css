@@ -52,6 +52,8 @@ body {
   color: #fff;
   background: rgba(15, 23, 42, .25);
   backdrop-filter: blur(6px);
+  position: relative;
+  z-index: 40; /* above board cards so share/presence popovers aren't covered */
 }
 
 .app-header h1 {
@@ -1306,6 +1308,12 @@ body.share-mode .card {
   background: #ffffff;
   border-top: 1px solid #e2e8f0;
   flex-shrink: 0;
+}
+.modal-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 .modal-card .modal-footer {
   background: rgba(255, 255, 255, .92);
